@@ -1,0 +1,42 @@
+name: Reach for the stars
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  fetch-stars:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install pipenv
+        run: python -m pip install --upgrade pip pipenv
+
+      - name: install python packages
+        run: pipenv install --skip-lock
+
+      - name: scrape stars
+        env:
+          GITHUB_USERNAME: ${{ github.repository_owner }}
+        run: pipenv run python scripts/star_scraper.py --output assets/data/stars.json
+
+      - name: commit files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git diff-index --quiet HEAD || (git commit -m "chore: update stars" --allow-empty)
+
+      - name: push changes
+        uses: ad-m/github-push-action@v0.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: main
