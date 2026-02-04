@@ -2,7 +2,9 @@
 
 Based on great simple project by @taylow: https://taylo.dev/posts/adding-github-stars-to-my-site.
 
-If it's not appropriate for me to have this repo (license issues, etc.) then contact me here in and I'd remove it.
+If it's not appropriate for me to have this repo (license issues, etc.) then contact me here in and I'd gladly remove it.
+
+For now I used MIT license as it's used the most and hope that I won't get sued
 
 # GitHub Stars Crawler
 
@@ -22,11 +24,6 @@ pipenv run python scripts/star_scraper.py -u YOUR_GITHUB_USERNAME --output asset
 
 Optional flags:
 
-```bash
-pipenv run python scripts/star_scraper.py -u YOUR_GITHUB_USERNAME --include-lists
-```
-
-Notes:
 - Use `--verbose` for stage-by-stage logging. Default output is progress-only.
 - Rate-limit controls: `--min-interval` (default `1.0` seconds, use `0` to disable delays),
   `--max-retries`, `--backoff-base`, `--backoff-max`, `--circuit-breaker-threshold`,
