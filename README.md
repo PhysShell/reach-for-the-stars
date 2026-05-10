@@ -1,70 +1,127 @@
-# Prologue
+# reach-for-the-stars
 
-Based on great simple project by @taylow: https://taylo.dev/posts/adding-github-stars-to-my-site.
+Small Rust CLI that exports a GitHub user's stargazed repositories to a JSON
+envelope. Designed for a daily GitHub Action: cheap incremental scans most of
+the time, periodic full reconciles that catch unstars, and an envelope schema
+that records its own sync state.
 
-If it's not appropriate for me to have this repo (license issues, etc.) then contact me here in and I'd gladly remove it.
+It does three things and nothing else:
 
-For now I used MIT license as it's used the most and hope that I won't get sued
+1. Fetch starred repos from the GitHub REST API (`star+json`, paginated).
+2. Merge them with the previous envelope using a hybrid sync model.
+3. Write the new envelope as pretty JSON.
 
-# GitHub Stars Crawler
+Encryption and remote upload (R2/S3) are deliberate non-goals at this stage.
 
-Fetch a user's GitHub stars and save them as JSON.
-
-## Setup (pipenv)
-
-```bash
-pipenv install
-```
-
-## Run
+## Usage
 
 ```bash
-pipenv run python scripts/star_scraper.py -u YOUR_GITHUB_USERNAME --output assets/data/stars.json
+# Build (one-off; CI builds release)
+cargo build --release
+
+# Export, picking sync mode automatically based on the previous envelope
+GITHUB_TOKEN=ghp_xxx ./target/release/reach-stars export \
+  --username PhysShell \
+  --output assets/data/stars.json \
+  --sync-mode auto
 ```
 
-Optional flags:
+`reach-stars export --help` lists every flag.
 
-- Use `--verbose` for stage-by-stage logging. Default output is progress-only.
-- Rate-limit controls: `--min-interval` (default `1.0` seconds, use `0` to disable delays),
-  `--max-retries`, `--backoff-base`, `--backoff-max`, `--circuit-breaker-threshold`,
-  `--circuit-breaker-cooldown`.
+### Sync modes
 
-```
-When I tested it on profile with 3.4k stars in started giving me `429 Client Error: Too Many Requests` halfway through
-and that's the reason --min-interval exists. With its default value it's able to complete crawling.
-```
+| Mode          | Cost       | Catches unstars? | When to use                        |
+| ------------- | ---------- | ---------------- | ---------------------------------- |
+| `incremental` | 1 page-ish | no               | most runs                          |
+| `full`        | every page | yes              | first run, periodic reconcile      |
+| `auto`        | hybrid     | sometimes        | default; full once a day, else inc |
 
-## Automation (GitHub Actions)
+`auto` runs `full` when there's no previous envelope, or when the recorded
+`last_full_reconcile_at` is older than `--full-reconcile-interval-hours`
+(default 24).
 
-This repo includes a scheduled workflow that runs nightly and updates `assets/data/stars.json`:
-`.github/workflows/reach-for-the-stars.yml`. It uses `GITHUB_USERNAME` (defaults to the repo owner).
+### Envelope schema (v2)
 
-## Tests
-
-Install dev dependencies and run pytest:
-
-```bash
-pipenv install --dev
-pipenv run pytest
-```
-
-## Output shape
-
-```json
+```jsonc
 {
-  "username": "example",
-  "last_updated": "2026-01-29T12:00:00Z",
+  "schema_version": 2,
+  "subject": { "kind": "user_starred_repositories", "username": "PhysShell" },
+  "exported_at": "2026-05-09T17:40:00Z",
+  "sync": {
+    "mode": "incremental",
+    "last_full_reconcile_at": "2026-05-08T00:00:00Z",
+    "watermark_starred_at": "2026-05-09T12:34:56Z",
+    "watermark_repo_id": 123456789
+  },
+  "stats": { "active_count": 120, "tombstone_count": 4, "total_count": 124 },
+  "data_hash": "sha256:...",       // hash of the semantic data only
   "stars": [
     {
-      "link": "https://github.com/owner/repo",
-      "name": "owner / repo",
-      "description": "Example description",
-      "stars": "1,234",
-      "language": "Go",
-      "language_color": "#00ADD8",
-      "forks": "123",
-      "updated": "2026-01-28T10:00:00Z"
+      "repo_id": 123456789,
+      "full_name": "owner/repo",
+      "html_url": "https://github.com/owner/repo",
+      "description": "Something useful",
+      "language": "Rust",
+      "starred_at": "2026-05-09T12:34:56Z",
+      "first_seen_at": "2026-05-09T12:35:10Z",
+      "last_seen_at":  "2026-05-09T12:35:10Z",
+      "unstarred_at": null,
+      "status": "active"   // or "unstarred"
     }
   ]
 }
 ```
+
+`data_hash` deliberately excludes `exported_at`, `first_seen_at`, and
+`last_seen_at`, so it stays stable when the underlying star set is stable.
+
+Unstars are tombstones (`status: "unstarred"`, plus an `unstarred_at`
+timestamp) — they are never deleted, so historical snapshots remain
+auditable.
+
+## GitHub Action
+
+Two workflows:
+
+- `.github/workflows/ci.yml` — on every PR and push to `main`. Runs
+  `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`,
+  `cargo doc -D warnings`, `cargo audit`, and `cargo deny check`. No
+  secrets, no upload.
+- `.github/workflows/reach-for-the-stars.yml` — on schedule (every 4h) and
+  manual dispatch. Builds the release binary, runs `reach-stars export`,
+  commits `assets/data/stars.json` if it changed.
+
+The export workflow is gated on `github.repository == 'PhysShell/reach-for-the-stars'`
+so it doesn't run on forks.
+
+## Development
+
+```bash
+cargo fmt --all
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+Strictness knobs (in `Cargo.toml`):
+
+- `unsafe_code = "forbid"`
+- `clippy::all = "deny"`, `clippy::pedantic = "warn"`, `clippy::cargo = "warn"`
+- `unwrap_used`, `expect_used`, `panic`, `todo`, `dbg_macro`, `print_stderr`
+  are denied in non-test code; tests opt out per-module.
+
+Supply-chain checks (`cargo audit`, `cargo deny`) run in CI. `deny.toml`
+restricts allowed licenses and the source registry.
+
+## Migrating from the previous Python scraper
+
+The old script wrote a flat list of strings (`stars: "1,234"`, etc) scraped
+from HTML. The new envelope is a different schema. On first run the Rust
+exporter sees the absent (or unparseable) file and runs a full reconcile to
+build a fresh v2 envelope.
+
+## License
+
+MIT — see `LICENSE`.
+
+Originally based on a small project by @taylow:
+<https://taylo.dev/posts/adding-github-stars-to-my-site>.
