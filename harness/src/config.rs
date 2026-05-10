@@ -1,0 +1,99 @@
+use anyhow::Result;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub browser: Browser,
+    pub seed: Seed,
+    pub canary: Canary,
+    pub crypto: Crypto,
+    pub lock: LockCfg,
+    pub stores: Vec<StoreCfg>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Browser {
+    pub chromium_bin: PathBuf,
+    pub user_data_dir: PathBuf,
+    #[serde(default = "default_true")]
+    pub headless: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Seed {
+    pub login_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Canary {
+    pub url: String,
+    pub expected_status: u16,
+    pub field: String,
+    pub expected_value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Crypto {
+    pub recipient_file: PathBuf,
+    pub verify_pubkey_file: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LockCfg {
+    pub ttl_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum StoreCfg {
+    S3 {
+        name: String,
+        endpoint: String,
+        region: String,
+        bucket: String,
+        prefix: String,
+        access_key_env: String,
+        secret_key_env: String,
+    },
+    GithubRelease {
+        name: String,
+        repo: String,
+        token_env: String,
+    },
+    GitBranch {
+        name: String,
+        repo_url: String,
+        branch: String,
+        token_env: String,
+    },
+}
+
+impl StoreCfg {
+    pub fn name(&self) -> &str {
+        match self {
+            StoreCfg::S3 { name, .. }
+            | StoreCfg::GithubRelease { name, .. }
+            | StoreCfg::GitBranch { name, .. } => name,
+        }
+    }
+}
+
+impl Config {
+    pub fn load(path: &Path) -> Result<Self> {
+        let raw = std::fs::read_to_string(path)?;
+        Ok(toml::from_str(&raw)?)
+    }
+
+    pub fn primary(&self) -> &StoreCfg {
+        &self.stores[0]
+    }
+
+    pub fn mirrors(&self) -> &[StoreCfg] {
+        &self.stores[1..]
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
