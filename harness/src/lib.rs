@@ -1,4 +1,6 @@
+pub mod archive;
 pub mod browser;
+pub mod commands;
 pub mod config;
 pub mod crypto;
 pub mod lock;

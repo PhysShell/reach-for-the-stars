@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -81,8 +81,9 @@ impl StoreCfg {
 
 impl Config {
     pub fn load(path: &Path) -> Result<Self> {
-        let raw = std::fs::read_to_string(path)?;
-        Ok(toml::from_str(&raw)?)
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("read config {}", path.display()))?;
+        toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))
     }
 
     pub fn primary(&self) -> &StoreCfg {

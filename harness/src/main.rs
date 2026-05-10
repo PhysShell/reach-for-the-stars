@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use ed25519_dalek::SigningKey;
+use rand::rngs::OsRng;
 use std::path::PathBuf;
 
 use harness::config::Config;
@@ -16,13 +18,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Print setup instructions for generating age + minisign keypairs.
+    /// Generate an ed25519 keypair; print secret (→ GitHub Secret) and pubkey (→ repo).
     GenKeys,
-    /// Open a headed browser, wait for manual login, then snapshot+upload.
+    /// Open a headed browser, wait for manual login, then snapshot and upload.
     Seed,
     /// Daily run: restore snapshot, verify canary, do work, save snapshot.
     Run,
-    /// Verify the latest snapshot decrypts and signature is valid.
+    /// Verify the latest snapshot decrypts and signature is valid (no browser).
     Verify,
 }
 
@@ -39,32 +41,27 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.cmd {
-        Cmd::GenKeys => commands::gen_keys(),
-        Cmd::Seed => commands::seed(&Config::load(&cli.config)?).await,
-        Cmd::Run => commands::run(&Config::load(&cli.config)?).await,
-        Cmd::Verify => commands::verify(&Config::load(&cli.config)?).await,
+        Cmd::GenKeys => gen_keys(),
+        Cmd::Seed => harness::commands::seed::run(&Config::load(&cli.config)?).await,
+        Cmd::Run => anyhow::bail!("run: not yet implemented"),
+        Cmd::Verify => anyhow::bail!("verify: not yet implemented"),
     }
 }
 
-mod commands {
-    use anyhow::Result;
-    use harness::config::Config;
+fn gen_keys() -> Result<()> {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
 
-    pub fn gen_keys() -> Result<()> {
-        println!("Run scripts/bootstrap.sh from inside `nix develop`.");
-        println!("It will generate age + minisign keypairs and seal them into GitHub Secrets.");
-        Ok(())
-    }
+    let secret_hex = hex::encode(signing_key.to_bytes());
+    let pubkey_hex = hex::encode(verifying_key.to_bytes());
 
-    pub async fn seed(_cfg: &Config) -> Result<()> {
-        anyhow::bail!("seed: not yet implemented");
-    }
+    eprintln!("==> ed25519 keypair generated");
+    eprintln!();
+    eprintln!("  Secret (→ HARNESS_SIGN_SECRET in GitHub Secrets):");
+    eprintln!("  {secret_hex}");
+    eprintln!();
+    eprintln!("  Public key (→ sign-pubkey.hex in repo, commit this):");
+    println!("{pubkey_hex}");
 
-    pub async fn run(_cfg: &Config) -> Result<()> {
-        anyhow::bail!("run: not yet implemented");
-    }
-
-    pub async fn verify(_cfg: &Config) -> Result<()> {
-        anyhow::bail!("verify: not yet implemented");
-    }
+    Ok(())
 }
