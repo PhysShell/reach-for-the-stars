@@ -44,3 +44,7 @@ bytes = "1.9"
 strip = true
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3.14"
