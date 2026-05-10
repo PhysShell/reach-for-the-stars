@@ -31,6 +31,7 @@ aws-sdk-s3 = "1.66"
 aws-credential-types = "1.2"
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "cookies"] }
+url = "2.5"
 
 chromiumoxide = { version = "0.7", features = ["tokio-runtime"] }
 
