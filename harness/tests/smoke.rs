@@ -19,6 +19,7 @@ use harness::browser::canary;
 use harness::browser::cdp::{cookies_to_reqwest_jar, BrowserSession, StorageState, StoredCookie};
 use harness::crypto::{encrypt, sign};
 use harness::secrets::StoreCredential;
+use harness::stores::git_branch::GitBranchStore;
 use harness::stores::s3::S3Store;
 use harness::stores::SnapshotStore;
 
@@ -224,6 +225,80 @@ fn s3_env() -> Option<(String, String, String)> {
     let ak = std::env::var("SMOKE_S3_ACCESS_KEY").unwrap_or_else(|_| "minioadmin".into());
     let sk = std::env::var("SMOKE_S3_SECRET_KEY").unwrap_or_else(|_| "minioadmin".into());
     Some((endpoint, ak, sk))
+}
+
+#[tokio::test]
+async fn git_branch_cas_semantics() {
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("[skip] git not on PATH");
+        return;
+    }
+
+    let upstream = tempfile::tempdir().unwrap();
+    let init = std::process::Command::new("git")
+        .args(["init", "--bare", "--initial-branch=state"])
+        .current_dir(upstream.path())
+        .output()
+        .unwrap();
+    assert!(
+        init.status.success(),
+        "git init bare failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let url = format!("file://{}", upstream.path().display());
+    let store = GitBranchStore::new(
+        "git-test".into(),
+        url,
+        "state".into(),
+        SecretString::from("ignored-for-file-url"),
+    )
+    .unwrap();
+
+    let v1 = Bytes::from_static(b"hello v1");
+    let v2 = Bytes::from_static(b"hello v2");
+    let v3 = Bytes::from_static(b"hello v3");
+
+    let r1 = store
+        .put_if_unmodified("latest.json", v1.clone(), None)
+        .await
+        .expect("create-only on absent should succeed");
+
+    let dup = store
+        .put_if_unmodified("latest.json", v1.clone(), None)
+        .await;
+    assert!(
+        dup.is_err(),
+        "create-only on existing should fail (got {dup:?})"
+    );
+
+    let r2 = store
+        .put_if_unmodified("latest.json", v2.clone(), Some(&r1.etag))
+        .await
+        .expect("update-only with matching etag should succeed");
+    assert_ne!(r1.etag, r2.etag, "etag (commit sha) should change");
+
+    let stale = store
+        .put_if_unmodified("latest.json", v3, Some(&r1.etag))
+        .await;
+    assert!(
+        stale.is_err(),
+        "update-only with stale etag should fail (got {stale:?})"
+    );
+
+    let (got, head_etag) = store.get("latest.json").await.unwrap();
+    assert_eq!(&got[..], &b"hello v2"[..]);
+    assert_eq!(head_etag, r2.etag);
+
+    let head_sha = store.head("latest.json").await.unwrap();
+    assert_eq!(head_sha.as_deref(), Some(r2.etag.as_str()));
+
+    let missing = store.head("never-written.json").await.unwrap();
+    assert!(missing.is_none());
 }
 
 async fn create_bucket(endpoint: &str, ak: &str, sk: &str, bucket: &str) {

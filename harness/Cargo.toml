@@ -39,6 +39,7 @@ chrono = { version = "0.4", features = ["serde"] }
 zstd = "0.13"
 tar = "0.4"
 bytes = "1.9"
+tempfile = "3.14"
 
 [profile.release]
 strip = true
