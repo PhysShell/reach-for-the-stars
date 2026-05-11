@@ -114,11 +114,7 @@ pub async fn build_store(cfg: &StoreCfg) -> Result<Box<dyn SnapshotStore>> {
 
 /// Best-effort fan-out write to mirrors after a successful primary write.
 /// Logs failures but does not propagate them: mirrors are eventual.
-pub async fn fanout(
-    mirrors: &[Box<dyn SnapshotStore>],
-    key: &str,
-    body: Bytes,
-) {
+pub async fn fanout(mirrors: &[Box<dyn SnapshotStore>], key: &str, body: Bytes) {
     for m in mirrors {
         match m.put(key, body.clone()).await {
             Ok(_) => tracing::info!(store = m.name(), key, "mirror put ok"),

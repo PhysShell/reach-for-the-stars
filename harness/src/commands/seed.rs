@@ -20,17 +20,16 @@ pub async fn run(cfg: &Config) -> Result<()> {
     for mirror_cfg in cfg.mirrors() {
         match stores::build_store(mirror_cfg).await {
             Ok(s) => mirrors.push(s),
-            Err(e) => tracing::warn!(store = mirror_cfg.name(), error = %e, "mirror unavailable, skipping"),
+            Err(e) => {
+                tracing::warn!(store = mirror_cfg.name(), error = %e, "mirror unavailable, skipping")
+            }
         }
     }
 
     tracing::info!(url = %cfg.seed.login_url, "launching headed browser");
-    let session = BrowserSession::launch(
-        &cfg.browser.chromium_bin,
-        &cfg.browser.user_data_dir,
-        false,
-    )
-    .await?;
+    let session =
+        BrowserSession::launch(&cfg.browser.chromium_bin, &cfg.browser.user_data_dir, false)
+            .await?;
     let _page = session.open(&cfg.seed.login_url).await?;
 
     eprintln!();
@@ -68,7 +67,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
         .await
         .context("put snapshot")?;
     primary
-        .put(&sig_key, Bytes::from(sig_hex))
+        .put(&sig_key, Bytes::from(sig_hex.clone()))
         .await
         .context("put signature")?;
 
@@ -76,7 +75,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
         version: ts.clone(),
         object: object_key.clone(),
         object_sha256: sha,
-        signature_object: sig_key,
+        signature_object: sig_key.clone(),
         created_at: now,
         format: SnapshotFormat::StorageStateV1,
     };
@@ -84,7 +83,11 @@ pub async fn run(cfg: &Config) -> Result<()> {
 
     let existing_etag = primary.head(LATEST_KEY).await?;
     match existing_etag {
-        None => primary.put(LATEST_KEY, pointer_bytes.clone()).await,
+        None => {
+            primary
+                .put_if_unmodified(LATEST_KEY, pointer_bytes.clone(), None)
+                .await
+        }
         Some(etag) => {
             primary
                 .put_if_unmodified(LATEST_KEY, pointer_bytes.clone(), Some(&etag))
@@ -94,8 +97,12 @@ pub async fn run(cfg: &Config) -> Result<()> {
     .context("put latest.json")?;
 
     stores::fanout(&mirrors, &object_key, ciphertext).await;
+    stores::fanout(&mirrors, &sig_key, Bytes::from(sig_hex)).await;
     stores::fanout(&mirrors, LATEST_KEY, pointer_bytes).await;
 
-    tracing::info!("seed complete: version={ts}, cookies={}", state.cookies.len());
+    tracing::info!(
+        "seed complete: version={ts}, cookies={}",
+        state.cookies.len()
+    );
     Ok(())
 }

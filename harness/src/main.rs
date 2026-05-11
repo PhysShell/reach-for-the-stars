@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
         Cmd::GenKeys => gen_keys(),
         Cmd::Seed => harness::commands::seed::run(&Config::load(&cli.config)?).await,
         Cmd::Run => harness::commands::run::run(&Config::load(&cli.config)?).await,
-        Cmd::Verify => anyhow::bail!("verify: not yet implemented"),
+        Cmd::Verify => harness::commands::verify::run(&Config::load(&cli.config)?).await,
     }
 }
 

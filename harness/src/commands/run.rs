@@ -20,8 +20,8 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let recipient = encrypt::read_recipient(&cfg.crypto.recipient_file)?;
     let signing_key_raw = MinisignKey::take_from_env("HARNESS_SIGN_SECRET")?;
     let signing_key = sign::parse_signing_key(signing_key_raw.expose())?;
-    let verify_pubkey_hex = std::fs::read_to_string(&cfg.crypto.verify_pubkey_file)
-        .with_context(|| {
+    let verify_pubkey_hex =
+        std::fs::read_to_string(&cfg.crypto.verify_pubkey_file).with_context(|| {
             format!(
                 "read verify pubkey {}",
                 cfg.crypto.verify_pubkey_file.display()
@@ -40,8 +40,8 @@ pub async fn run(cfg: &Config) -> Result<()> {
         }
     }
 
-    let run_id =
-        std::env::var("GITHUB_RUN_ID").unwrap_or_else(|_| format!("local-{}", Utc::now().timestamp()));
+    let run_id = std::env::var("GITHUB_RUN_ID")
+        .unwrap_or_else(|_| format!("local-{}", Utc::now().timestamp()));
     let ttl = Duration::from_secs(cfg.lock.ttl_seconds);
     let guard = lock::acquire(&*primary, run_id, ttl).await?;
     tracing::info!("lock acquired");
@@ -177,6 +177,7 @@ async fn run_locked(
         .context("CAS update of latest.json (someone else wrote concurrently?)")?;
 
     stores::fanout(mirrors, &new_object_key, new_ciphertext).await;
+    stores::fanout(mirrors, &new_sig_key, Bytes::from(hex::encode(&new_sig))).await;
     stores::fanout(mirrors, LATEST_KEY, new_pointer_bytes).await;
 
     tracing::info!(version = %ts, cookies = new_state.cookies.len(), "run complete");

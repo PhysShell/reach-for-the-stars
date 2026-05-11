@@ -171,13 +171,9 @@ async fn full_cycle_with_chromium() {
     };
 
     let temp = tempfile::tempdir().unwrap();
-    let session = BrowserSession::launch(
-        std::path::Path::new(&chromium_bin),
-        temp.path(),
-        true,
-    )
-    .await
-    .expect("chromium launch");
+    let session = BrowserSession::launch(std::path::Path::new(&chromium_bin), temp.path(), true)
+        .await
+        .expect("chromium launch");
 
     session
         .import_storage_state(&state)

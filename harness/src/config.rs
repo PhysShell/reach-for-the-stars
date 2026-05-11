@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -83,7 +83,22 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))
+        let cfg: Self =
+            toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.stores.is_empty(),
+            "config must define at least one [[stores]] entry"
+        );
+        ensure!(
+            self.lock.ttl_seconds > 0,
+            "lock.ttl_seconds must be greater than zero"
+        );
+        Ok(())
     }
 
     pub fn primary(&self) -> &StoreCfg {

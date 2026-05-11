@@ -51,3 +51,12 @@ kind = "github_release"
 name = "mirror-gh-release"
 repo = "owner/agent-state"
 token_env = "GITHUB_TOKEN"
+
+# Optional zero-vendor-lock mirror. Use a dedicated state branch; do not point
+# this at the branch that contains application source code.
+# [[stores]]
+# kind = "git_branch"
+# name = "mirror-git-branch"
+# repo_url = "https://github.com/owner/agent-state.git"
+# branch = "agent-state"
+# token_env = "GITHUB_TOKEN"
