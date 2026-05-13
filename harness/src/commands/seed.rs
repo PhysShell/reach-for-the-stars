@@ -54,7 +54,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let plaintext = archive::compress(&state)?;
     let ciphertext: Bytes = encrypt::encrypt(&plaintext, &recipient)?;
     let sig_bytes = sign::sign(&signing_key, &ciphertext);
-    let sig_hex = hex::encode(&sig_bytes);
+    let sig_payload = Bytes::from(hex::encode(&sig_bytes));
 
     let now = Utc::now();
     let ts = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
@@ -68,7 +68,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
         .await
         .context("put snapshot")?;
     primary
-        .put(&sig_key, Bytes::from(sig_hex))
+        .put(&sig_key, sig_payload.clone())
         .await
         .context("put signature")?;
 
@@ -76,7 +76,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
         version: ts.clone(),
         object: object_key.clone(),
         object_sha256: sha,
-        signature_object: sig_key,
+        signature_object: sig_key.clone(),
         created_at: now,
         format: SnapshotFormat::StorageStateV1,
     };
@@ -84,7 +84,13 @@ pub async fn run(cfg: &Config) -> Result<()> {
 
     let existing_etag = primary.head(LATEST_KEY).await?;
     match existing_etag {
-        None => primary.put(LATEST_KEY, pointer_bytes.clone()).await,
+        None => {
+            // Create-only via If-None-Match: * so two concurrent seeds can't
+            // both think they're the first writer and race to clobber each other.
+            primary
+                .put_if_unmodified(LATEST_KEY, pointer_bytes.clone(), None)
+                .await
+        }
         Some(etag) => {
             primary
                 .put_if_unmodified(LATEST_KEY, pointer_bytes.clone(), Some(&etag))
@@ -94,6 +100,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
     .context("put latest.json")?;
 
     stores::fanout(&mirrors, &object_key, ciphertext).await;
+    stores::fanout(&mirrors, &sig_key, sig_payload).await;
     stores::fanout(&mirrors, LATEST_KEY, pointer_bytes).await;
 
     tracing::info!("seed complete: version={ts}, cookies={}", state.cookies.len());

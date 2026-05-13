@@ -239,11 +239,11 @@ async fn save(
     };
     ensure_monotonic(Some(prev_pointer), &new_pointer)?;
 
+    let sig_payload = Bytes::from(hex::encode(&new_sig));
+
     tracing::info!(object = %new_object_key, "uploading snapshot");
     primary.put(&new_object_key, new_ciphertext.clone()).await?;
-    primary
-        .put(&new_sig_key, Bytes::from(hex::encode(&new_sig)))
-        .await?;
+    primary.put(&new_sig_key, sig_payload.clone()).await?;
 
     let new_pointer_bytes = Bytes::from(serde_json::to_vec_pretty(&new_pointer)?);
     primary
@@ -252,6 +252,7 @@ async fn save(
         .context("CAS update of latest.json (someone else wrote concurrently?)")?;
 
     stores::fanout(mirrors, &new_object_key, new_ciphertext).await;
+    stores::fanout(mirrors, &new_sig_key, sig_payload).await;
     stores::fanout(mirrors, LATEST_KEY, new_pointer_bytes).await;
 
     Ok(ts)

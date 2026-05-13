@@ -51,3 +51,14 @@ kind = "github_release"
 name = "mirror-gh-release"
 repo = "owner/agent-state"
 token_env = "GITHUB_TOKEN"
+
+# Zero-vendor-lock mirror: pushes snapshots to a dedicated branch of a git
+# repo via --force-with-lease. Only needs a GITHUB_TOKEN (or any git server
+# token); no R2/B2/AWS keys involved. Add as a second mirror or use as the
+# sole primary if you want to escape S3-compat entirely.
+[[stores]]
+kind = "git_branch"
+name = "mirror-git-branch"
+repo_url = "https://github.com/owner/agent-state.git"
+branch = "state"
+token_env = "GITHUB_TOKEN"

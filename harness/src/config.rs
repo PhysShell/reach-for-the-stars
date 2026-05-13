@@ -83,7 +83,25 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))
+        let cfg: Self = toml::from_str(&raw)
+            .with_context(|| format!("parse config {}", path.display()))?;
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Surface configuration mistakes that would otherwise blow up deep in the
+    /// pipeline (`stores[0]` panicking on empty list, zero-TTL locks expiring
+    /// immediately, etc.) as a single descriptive error at startup.
+    fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.stores.is_empty(),
+            "config: stores must contain at least one entry (the primary)"
+        );
+        anyhow::ensure!(
+            self.lock.ttl_seconds > 0,
+            "config: lock.ttl_seconds must be > 0 (lock with TTL=0 expires immediately and provides no mutual exclusion)"
+        );
+        Ok(())
     }
 
     pub fn primary(&self) -> &StoreCfg {
