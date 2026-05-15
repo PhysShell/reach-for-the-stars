@@ -85,6 +85,17 @@ impl Config {
             .with_context(|| format!("read config {}", path.display()))?;
         let mut cfg: Self = toml::from_str(&raw)
             .with_context(|| format!("parse config {}", path.display()))?;
+
+        // Resolve relative paths against the config file's directory so the
+        // harness can be invoked from any working directory.
+        if let Some(base) = path.canonicalize().ok().and_then(|p| p.parent().map(PathBuf::from)) {
+            let resolve = |p: PathBuf| if p.is_relative() { base.join(p) } else { p };
+            cfg.browser.chromium_bin  = resolve(cfg.browser.chromium_bin);
+            cfg.browser.user_data_dir = resolve(cfg.browser.user_data_dir);
+            cfg.crypto.recipient_file     = resolve(cfg.crypto.recipient_file);
+            cfg.crypto.verify_pubkey_file = resolve(cfg.crypto.verify_pubkey_file);
+        }
+
         if let Ok(bin) = std::env::var("CHROMIUM_BIN") {
             cfg.browser.chromium_bin = PathBuf::from(bin);
         }
