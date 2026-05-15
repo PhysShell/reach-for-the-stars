@@ -17,7 +17,12 @@ require() {
 require age-keygen
 require gh
 require jq
-require cargo
+require nix
+
+if ! gh auth status --active >/dev/null 2>&1; then
+  echo "error: gh is not authenticated. Run 'gh auth login' first." >&2
+  exit 1
+fi
 
 mkdir -p "$SECRETS_DIR"
 cd "$HARNESS_DIR"
@@ -34,8 +39,7 @@ age-keygen -y "$SECRETS_DIR/age-key.txt" > "$HARNESS_DIR/age-recipient.txt"
 chmod 600 "$SECRETS_DIR/age-key.txt"
 
 echo "==> Generating ed25519 signing keypair"
-cargo build --release --quiet
-KEYS_JSON=$("$HARNESS_DIR/target/release/harness" gen-keys --json)
+KEYS_JSON=$(nix run "$HARNESS_DIR#harness" -- gen-keys --json)
 SIGN_SECRET=$(echo "$KEYS_JSON" | jq -r .secret)
 SIGN_PUBKEY=$(echo "$KEYS_JSON" | jq -r .pubkey)
 
@@ -62,10 +66,10 @@ read -rp "R2 Bucket:                " R2_BUCKET
 
 gh secret set HARNESS_AGE_IDENTITY  --repo "$GH_REPO" < "$SECRETS_DIR/age-key.txt"
 gh secret set HARNESS_SIGN_SECRET   --repo "$GH_REPO" < "$SECRETS_DIR/sign-secret.hex"
-gh secret set HARNESS_R2_ACCESS_KEY --repo "$GH_REPO" -b "$R2_AK"
-gh secret set HARNESS_R2_SECRET_KEY --repo "$GH_REPO" -b "$R2_SK"
-gh secret set HARNESS_R2_ENDPOINT   --repo "$GH_REPO" -b "$R2_ENDPOINT"
-gh secret set HARNESS_R2_BUCKET     --repo "$GH_REPO" -b "$R2_BUCKET"
+printf '%s' "$R2_AK"       | gh secret set HARNESS_R2_ACCESS_KEY --repo "$GH_REPO"
+printf '%s' "$R2_SK"       | gh secret set HARNESS_R2_SECRET_KEY --repo "$GH_REPO"
+printf '%s' "$R2_ENDPOINT" | gh secret set HARNESS_R2_ENDPOINT   --repo "$GH_REPO"
+printf '%s' "$R2_BUCKET"   | gh secret set HARNESS_R2_BUCKET     --repo "$GH_REPO"
 
 echo
 echo "Done."

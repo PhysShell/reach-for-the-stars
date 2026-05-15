@@ -86,7 +86,7 @@ seed (one-time, interactive):
     → put snapshot + sig + latest.json to primary store (CAS-guarded)
     → fan out to mirrors
 
-run (daily cron):
+run (cron):
   acquire CAS lock on primary
     ↓
   GET latest.json (capture its etag for the closing CAS write)
