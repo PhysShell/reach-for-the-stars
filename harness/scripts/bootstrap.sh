@@ -27,35 +27,38 @@ fi
 mkdir -p "$SECRETS_DIR"
 cd "$HARNESS_DIR"
 
-if [[ -f "$SECRETS_DIR/age-key.txt" ]]; then
-  echo "$SECRETS_DIR/age-key.txt already exists; refusing to overwrite." >&2
-  echo "If you really want to rotate, move it aside manually first." >&2
-  exit 1
+KEYS_EXIST=false
+if [[ -f "$SECRETS_DIR/age-key.txt" && -f "$SECRETS_DIR/sign-secret.hex" ]]; then
+  KEYS_EXIST=true
+  echo "==> Keypairs already exist in $SECRETS_DIR — skipping keygen, will re-upload."
+else
+  if [[ -f "$SECRETS_DIR/age-key.txt" || -f "$SECRETS_DIR/sign-secret.hex" ]]; then
+    echo "error: partial keygen state in $SECRETS_DIR (only one key file found)." >&2
+    echo "       Remove both age-key.txt and sign-secret.hex to start fresh." >&2
+    exit 1
+  fi
+
+  echo "==> Generating age keypair"
+  age-keygen -o "$SECRETS_DIR/age-key.txt"
+  age-keygen -y "$SECRETS_DIR/age-key.txt" > "$HARNESS_DIR/age-recipient.txt"
+  chmod 600 "$SECRETS_DIR/age-key.txt"
+
+  echo "==> Generating ed25519 signing keypair"
+  KEYS_JSON=$(nix run "$HARNESS_DIR#harness" -- gen-keys --json)
+  SIGN_SECRET=$(echo "$KEYS_JSON" | jq -r .secret)
+  SIGN_PUBKEY=$(echo "$KEYS_JSON" | jq -r .pubkey)
+
+  echo "$SIGN_PUBKEY" > "$HARNESS_DIR/sign-pubkey.hex"
+  printf '%s\n' "$SIGN_SECRET" > "$SECRETS_DIR/sign-secret.hex"
+  chmod 600 "$SECRETS_DIR/sign-secret.hex"
+  unset KEYS_JSON SIGN_SECRET SIGN_PUBKEY
+
+  echo
+  echo "=== Public artefacts (commit these) ==="
+  echo "  harness/age-recipient.txt"
+  echo "  harness/sign-pubkey.hex"
+  echo
 fi
-
-echo "==> Generating age keypair"
-age-keygen -o "$SECRETS_DIR/age-key.txt"
-age-keygen -y "$SECRETS_DIR/age-key.txt" > "$HARNESS_DIR/age-recipient.txt"
-chmod 600 "$SECRETS_DIR/age-key.txt"
-
-echo "==> Generating ed25519 signing keypair"
-KEYS_JSON=$(nix run "$HARNESS_DIR#harness" -- gen-keys --json)
-SIGN_SECRET=$(echo "$KEYS_JSON" | jq -r .secret)
-SIGN_PUBKEY=$(echo "$KEYS_JSON" | jq -r .pubkey)
-
-# Public key goes in the repo (used by `verify` and `run` to check signatures).
-echo "$SIGN_PUBKEY" > "$HARNESS_DIR/sign-pubkey.hex"
-
-# Secret goes in a transient file with restrictive perms; piped into gh and shredded.
-printf '%s\n' "$SIGN_SECRET" > "$SECRETS_DIR/sign-secret.hex"
-chmod 600 "$SECRETS_DIR/sign-secret.hex"
-unset KEYS_JSON SIGN_SECRET SIGN_PUBKEY
-
-echo
-echo "=== Public artefacts (commit these) ==="
-echo "  harness/age-recipient.txt"
-echo "  harness/sign-pubkey.hex"
-echo
 echo "=== Sealing private artefacts into GitHub Secrets ==="
 
 read -rp "GitHub repo (owner/name): " GH_REPO

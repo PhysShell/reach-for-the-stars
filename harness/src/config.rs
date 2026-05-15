@@ -83,8 +83,11 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
-        let cfg: Self = toml::from_str(&raw)
+        let mut cfg: Self = toml::from_str(&raw)
             .with_context(|| format!("parse config {}", path.display()))?;
+        if let Ok(bin) = std::env::var("CHROMIUM_BIN") {
+            cfg.browser.chromium_bin = PathBuf::from(bin);
+        }
         cfg.validate()?;
         Ok(cfg)
     }
