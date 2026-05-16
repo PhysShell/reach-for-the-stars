@@ -88,13 +88,21 @@ impl Config {
 
         // Resolve relative paths against the config file's directory so the
         // harness can be invoked from any working directory.
-        if let Some(base) = path.canonicalize().ok().and_then(|p| p.parent().map(PathBuf::from)) {
-            let resolve = |p: PathBuf| if p.is_relative() { base.join(p) } else { p };
-            cfg.browser.chromium_bin  = resolve(cfg.browser.chromium_bin);
-            cfg.browser.user_data_dir = resolve(cfg.browser.user_data_dir);
-            cfg.crypto.recipient_file     = resolve(cfg.crypto.recipient_file);
-            cfg.crypto.verify_pubkey_file = resolve(cfg.crypto.verify_pubkey_file);
-        }
+        //
+        // canonicalize() can only fail here if the file vanished between the
+        // read above and now (TOCTOU) or on a permission/symlink anomaly.
+        // Surface that explicitly instead of silently leaving paths relative
+        // to CWD — a silent fallback would resolve crypto/key files against
+        // the wrong directory and fail later with a confusing "file not found".
+        let base = path
+            .canonicalize()
+            .with_context(|| format!("canonicalize config path {}", path.display()))?;
+        let base = base.parent().unwrap_or(Path::new("."));
+        let resolve = |p: PathBuf| if p.is_relative() { base.join(p) } else { p };
+        cfg.browser.chromium_bin = resolve(cfg.browser.chromium_bin);
+        cfg.browser.user_data_dir = resolve(cfg.browser.user_data_dir);
+        cfg.crypto.recipient_file = resolve(cfg.crypto.recipient_file);
+        cfg.crypto.verify_pubkey_file = resolve(cfg.crypto.verify_pubkey_file);
 
         if let Ok(bin) = std::env::var("CHROMIUM_BIN") {
             cfg.browser.chromium_bin = PathBuf::from(bin);

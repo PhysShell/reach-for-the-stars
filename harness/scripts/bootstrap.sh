@@ -27,9 +27,7 @@ fi
 mkdir -p "$SECRETS_DIR"
 cd "$HARNESS_DIR"
 
-KEYS_EXIST=false
 if [[ -f "$SECRETS_DIR/age-key.txt" && -f "$SECRETS_DIR/sign-secret.hex" ]]; then
-  KEYS_EXIST=true
   echo "==> Keypairs already exist in $SECRETS_DIR — skipping keygen, will re-upload."
 else
   if [[ -f "$SECRETS_DIR/age-key.txt" || -f "$SECRETS_DIR/sign-secret.hex" ]]; then
