@@ -38,6 +38,19 @@ jobs:
         with:
           use-flakehub: false
 
+      - name: Locate chromium
+        run: |
+          CHROMIUM_OUT=$(nix build .#chromium --no-link --print-out-paths)
+          echo "CHROMIUM_BIN=${CHROMIUM_OUT}/bin/chromium" >> "$GITHUB_ENV"
+
+      - name: Write config
+        env:
+          HARNESS_R2_ENDPOINT:           ${{ secrets.HARNESS_R2_ENDPOINT }}
+          HARNESS_R2_BUCKET:             ${{ secrets.HARNESS_R2_BUCKET }}
+          HARNESS_CANARY_EXPECTED_VALUE: ${{ secrets.HARNESS_CANARY_EXPECTED_VALUE }}
+        run: envsubst < config.ci.toml > config.toml
+
+
       - name: Run harness
         env:
           HARNESS_AGE_IDENTITY:  ${{ secrets.HARNESS_AGE_IDENTITY }}
