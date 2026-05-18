@@ -20,8 +20,8 @@ impl AgeIdentity {
         let key_line = raw
             .lines()
             .find(|l| l.starts_with("AGE-SECRET-KEY-"))
-            .unwrap_or(raw.trim());
-        age::x25519::Identity::from_str(self.0.expose_secret())
+            .unwrap_or_else(|| raw.trim());
+        age::x25519::Identity::from_str(key_line)
             .map_err(|e| anyhow::anyhow!("invalid age identity: {e}"))
     }
 }
