@@ -11,7 +11,7 @@ headless = true
 login_url = "https://chatgpt.com/auth/login"
 
 [canary]
-url = "https://chatgpt.com/api/me"
+url = "https://chatgpt.com/backend-api/me"
 expected_status = 200
 field = "/id"
 expected_value = "${HARNESS_CANARY_EXPECTED_VALUE}"
