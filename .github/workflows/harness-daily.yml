@@ -38,11 +38,6 @@ jobs:
         with:
           use-flakehub: false
 
-      - name: Locate chromium
-        run: |
-          CHROMIUM_OUT=$(nix build .#chromium --no-link --print-out-paths)
-          echo "CHROMIUM_BIN=${CHROMIUM_OUT}/bin/chromium" >> "$GITHUB_ENV"
-
       - name: Write config
         env:
           HARNESS_R2_ENDPOINT:           ${{ secrets.HARNESS_R2_ENDPOINT }}
