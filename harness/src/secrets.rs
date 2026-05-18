@@ -14,6 +14,13 @@ impl AgeIdentity {
     }
 
     pub fn parse(&self) -> Result<age::x25519::Identity> {
+        let raw = self.0.expose_secret();
+        // age-keygen writes a multi-line file with comment headers; GitHub
+        // Secrets preserves newlines, so extract the key line explicitly.
+        let key_line = raw
+            .lines()
+            .find(|l| l.starts_with("AGE-SECRET-KEY-"))
+            .unwrap_or(raw.trim());
         age::x25519::Identity::from_str(self.0.expose_secret())
             .map_err(|e| anyhow::anyhow!("invalid age identity: {e}"))
     }
