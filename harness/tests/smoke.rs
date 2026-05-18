@@ -316,3 +316,63 @@ async fn create_bucket(endpoint: &str, ak: &str, sk: &str, bucket: &str) {
     let s3 = Client::from_conf(s3_cfg);
     let _ = s3.create_bucket().bucket(bucket).send().await;
 }
+
+#[tokio::test]
+async fn canary_sends_browser_headers() {
+    use wiremock::matchers::{header_exists, header_regex, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock = MockServer::start().await;
+
+    // Only a browser-looking request (Mozilla UA + an Accept header) gets 200.
+    // wiremock auto-returns 404 for anything that doesn't match — exactly the
+    // "looks like a broken curl" failure this addresses.
+    Mock::given(method("GET"))
+        .and(path("/api/me"))
+        .and(header_regex("user-agent", "Mozilla"))
+        .and(header_exists("accept"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"user": {"id": "smoke-user-id"}})),
+        )
+        .mount(&mock)
+        .await;
+
+    let cfg = harness::config::Canary {
+        url: format!("{}/api/me", mock.uri()),
+        expected_status: 200,
+        field: "/user/id".into(),
+        expected_value: "smoke-user-id".into(),
+        user_agent: harness::config::default_user_agent(),
+        headers: std::collections::HashMap::new(),
+    };
+
+    // Configured client: realistic UA + default Accept → 200, canary ok.
+    let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
+    let client = harness::browser::canary::build_client(jar, &cfg).unwrap();
+    let res = harness::browser::canary::check(
+        &client,
+        &cfg.url,
+        cfg.expected_status,
+        &cfg.field,
+        &cfg.expected_value,
+    )
+    .await
+    .unwrap();
+    assert!(res.ok, "configured client should pass: {res:?}");
+
+    // Bare client (no UA, no Accept) → wiremock 404 → canary fails. Proves the
+    // header fix is load-bearing, not cosmetic.
+    let bare = reqwest::Client::new();
+    let res_bare = harness::browser::canary::check(
+        &bare,
+        &cfg.url,
+        cfg.expected_status,
+        &cfg.field,
+        &cfg.expected_value,
+    )
+    .await
+    .unwrap();
+    assert!(!res_bare.ok, "bare client should fail: {res_bare:?}");
+    assert_eq!(res_bare.status, 404);
+}

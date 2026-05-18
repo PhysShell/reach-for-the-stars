@@ -114,10 +114,7 @@ async fn run_locked(
     session.import_storage_state(&prev.state).await?;
 
     let jar = cdp::cookies_to_reqwest_jar(&prev.state);
-    let http = reqwest::Client::builder()
-        .cookie_provider(jar)
-        .build()
-        .context("build canary client")?;
+    let http = canary::build_client(jar, &cfg.canary)?;
 
     let canary_result = canary::check(
         &http,

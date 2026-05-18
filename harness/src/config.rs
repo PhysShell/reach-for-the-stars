@@ -1,5 +1,6 @@
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,15 @@ pub struct Canary {
     pub expected_status: u16,
     pub field: String,
     pub expected_value: String,
+    /// Sent as the canary request's User-Agent. A bare reqwest UA gets 403/404
+    /// from WAFs and many JSON APIs; a realistic browser UA avoids that. Not
+    /// an anti-bot bypass — just "don't look like a broken curl".
+    #[serde(default = "default_user_agent")]
+    pub user_agent: String,
+    /// Extra request headers (e.g. `Accept`, `Origin`). Anything set here
+    /// overrides the built-in defaults for the same header name.
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,4 +147,12 @@ impl Config {
 
 fn default_true() -> bool {
     true
+}
+
+/// A current, realistic desktop Chrome UA. Bump occasionally; a stale UA is
+/// itself a (mild) signal, but any plausible browser UA beats `reqwest/x.y`.
+pub fn default_user_agent() -> String {
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+     Chrome/131.0.0.0 Safari/537.36"
+        .to_string()
 }
