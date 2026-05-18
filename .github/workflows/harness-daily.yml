@@ -38,10 +38,16 @@ jobs:
         with:
           use-flakehub: false
 
-      - name: Locate chromium
+      - name: Install Chrome
         run: |
-          CHROMIUM_OUT=$(nix build .#chromium --no-link --print-out-paths)
-          echo "CHROMIUM_BIN=${CHROMIUM_OUT}/bin/chromium" >> "$GITHUB_ENV"
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/google-chrome.gpg >/dev/null
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
+            http://dl.google.com/linux/chrome/deb/ stable main" \
+            | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -q
+          sudo apt-get install -y -q google-chrome-stable
+          echo "CHROMIUM_BIN=$(which google-chrome-stable)" >> "$GITHUB_ENV"
 
       - name: Write config
         env:
