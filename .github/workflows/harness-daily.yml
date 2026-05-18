@@ -38,12 +38,6 @@ jobs:
         with:
           use-flakehub: false
 
-      - name: Jitter
-        run: |
-          DELAY=$((RANDOM % 1800))
-          echo "Sleeping ${DELAY}s"
-          sleep "$DELAY"
-
       - name: Run harness
         env:
           HARNESS_AGE_IDENTITY:  ${{ secrets.HARNESS_AGE_IDENTITY }}
