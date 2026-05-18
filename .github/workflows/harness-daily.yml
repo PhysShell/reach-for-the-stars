@@ -43,7 +43,7 @@ jobs:
           HARNESS_R2_ENDPOINT:           ${{ secrets.HARNESS_R2_ENDPOINT }}
           HARNESS_R2_BUCKET:             ${{ secrets.HARNESS_R2_BUCKET }}
           HARNESS_CANARY_EXPECTED_VALUE: ${{ secrets.HARNESS_CANARY_EXPECTED_VALUE }}
-        run: envsubst < config.ci.toml > config.toml
+        run: envsubst < config-prod.toml > config.toml
 
 
       - name: Run harness
