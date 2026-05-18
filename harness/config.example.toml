@@ -1,4 +1,12 @@
 # Copy to config.toml and fill in. Never commit config.toml.
+# TODO: direnv or regular env at least:
+#export HARNESS_AGE_IDENTITY=$(cat harness/.secrets/age-key.txt)
+#export HARNESS_SIGN_SECRET=$(cat harness/.secrets/sign-secret.hex)
+#export HARNESS_R2_ACCESS_KEY=<your key>
+#export HARNESS_R2_SECRET_KEY=<your secret>
+#export HARNESS_R2_ENDPOINT=<https://...r2.cloudflarestorage.com>
+#export HARNESS_R2_BUCKET=<bucket name>
+
 
 [browser]
 chromium_bin = "/run/current-system/sw/bin/chromium"
@@ -20,7 +28,7 @@ expected_value = "REPLACE_WITH_YOUR_USER_ID"
 
 [crypto]
 recipient_file = "age-recipient.txt"
-verify_pubkey_file = "minisign.pub"
+verify_pubkey_file = "sign-pubkey.hex"
 
 [lock]
 ttl_seconds = 1800
@@ -60,3 +68,13 @@ token_env = "GITHUB_TOKEN"
 # repo_url = "https://github.com/owner/agent-state.git"
 # branch = "agent-state"
 # token_env = "GITHUB_TOKEN"
+# Zero-vendor-lock mirror: pushes snapshots to a dedicated branch of a git
+# repo via --force-with-lease. Only needs a GITHUB_TOKEN (or any git server
+# token); no R2/B2/AWS keys involved. Add as a second mirror or use as the
+# sole primary if you want to escape S3-compat entirely.
+[[stores]]
+kind = "git_branch"
+name = "mirror-git-branch"
+repo_url = "https://github.com/owner/agent-state.git"
+branch = "state"
+token_env = "GITHUB_TOKEN"

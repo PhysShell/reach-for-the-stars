@@ -19,7 +19,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Generate an ed25519 keypair; print secret (→ GitHub Secret) and pubkey (→ repo).
-    GenKeys,
+    GenKeys {
+        /// Emit a single JSON line `{"secret": "...", "pubkey": "..."}` on stdout
+        /// instead of the human-readable two-stream output. Intended for scripts.
+        #[arg(long)]
+        json: bool,
+    },
     /// Open a headed browser, wait for manual login, then snapshot and upload.
     Seed,
     /// Daily run: restore snapshot, verify canary, do work, save snapshot.
@@ -41,27 +46,35 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.cmd {
-        Cmd::GenKeys => gen_keys(),
+        Cmd::GenKeys { json } => gen_keys(json),
         Cmd::Seed => harness::commands::seed::run(&Config::load(&cli.config)?).await,
         Cmd::Run => harness::commands::run::run(&Config::load(&cli.config)?).await,
         Cmd::Verify => harness::commands::verify::run(&Config::load(&cli.config)?).await,
     }
 }
 
-fn gen_keys() -> Result<()> {
+fn gen_keys(json: bool) -> Result<()> {
     let signing_key = SigningKey::generate(&mut OsRng);
     let verifying_key = signing_key.verifying_key();
 
     let secret_hex = hex::encode(signing_key.to_bytes());
     let pubkey_hex = hex::encode(verifying_key.to_bytes());
 
-    eprintln!("==> ed25519 keypair generated");
-    eprintln!();
-    eprintln!("  Secret (→ HARNESS_SIGN_SECRET in GitHub Secrets):");
-    eprintln!("  {secret_hex}");
-    eprintln!();
-    eprintln!("  Public key (→ sign-pubkey.hex in repo, commit this):");
-    println!("{pubkey_hex}");
+    if json {
+        let out = serde_json::json!({
+            "secret": secret_hex,
+            "pubkey": pubkey_hex,
+        });
+        println!("{}", serde_json::to_string(&out)?);
+    } else {
+        eprintln!("==> ed25519 keypair generated");
+        eprintln!();
+        eprintln!("  Secret (→ HARNESS_SIGN_SECRET in GitHub Secrets):");
+        eprintln!("  {secret_hex}");
+        eprintln!();
+        eprintln!("  Public key (→ sign-pubkey.hex in repo, commit this):");
+        println!("{pubkey_hex}");
+    }
 
     Ok(())
 }

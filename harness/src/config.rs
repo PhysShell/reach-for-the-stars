@@ -83,20 +83,45 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("read config {}", path.display()))?;
-        let cfg: Self =
-            toml::from_str(&raw).with_context(|| format!("parse config {}", path.display()))?;
+        let mut cfg: Self = toml::from_str(&raw)
+            .with_context(|| format!("parse config {}", path.display()))?;
+
+        // Resolve relative paths against the config file's directory so the
+        // harness can be invoked from any working directory.
+        //
+        // canonicalize() can only fail here if the file vanished between the
+        // read above and now (TOCTOU) or on a permission/symlink anomaly.
+        // Surface that explicitly instead of silently leaving paths relative
+        // to CWD — a silent fallback would resolve crypto/key files against
+        // the wrong directory and fail later with a confusing "file not found".
+        let base = path
+            .canonicalize()
+            .with_context(|| format!("canonicalize config path {}", path.display()))?;
+        let base = base.parent().unwrap_or(Path::new("."));
+        let resolve = |p: PathBuf| if p.is_relative() { base.join(p) } else { p };
+        cfg.browser.chromium_bin = resolve(cfg.browser.chromium_bin);
+        cfg.browser.user_data_dir = resolve(cfg.browser.user_data_dir);
+        cfg.crypto.recipient_file = resolve(cfg.crypto.recipient_file);
+        cfg.crypto.verify_pubkey_file = resolve(cfg.crypto.verify_pubkey_file);
+
+        if let Ok(bin) = std::env::var("CHROMIUM_BIN") {
+            cfg.browser.chromium_bin = PathBuf::from(bin);
+        }
         cfg.validate()?;
         Ok(cfg)
     }
 
+    /// Surface configuration mistakes that would otherwise blow up deep in the
+    /// pipeline (`stores[0]` panicking on empty list, zero-TTL locks expiring
+    /// immediately, etc.) as a single descriptive error at startup.
     fn validate(&self) -> Result<()> {
-        ensure!(
+        anyhow::ensure!(
             !self.stores.is_empty(),
-            "config must define at least one [[stores]] entry"
+            "config: stores must contain at least one entry (the primary)"
         );
-        ensure!(
+        anyhow::ensure!(
             self.lock.ttl_seconds > 0,
-            "lock.ttl_seconds must be greater than zero"
+            "config: lock.ttl_seconds must be > 0 (lock with TTL=0 expires immediately and provides no mutual exclusion)"
         );
         Ok(())
     }

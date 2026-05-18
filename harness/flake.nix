@@ -2,6 +2,8 @@
   description = "Encrypted browser-state checkpoint harness";
 
   inputs = {
+    # TODO: bump to nixos-25.11 — crane emits a warning that it requires ≥25.11.
+    # Do this when the Nix store cache is already cold to avoid a surprise 20-min rebuild.
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
     crane.url = "github:ipetkov/crane";

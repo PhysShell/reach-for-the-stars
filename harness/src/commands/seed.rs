@@ -53,7 +53,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let plaintext = archive::compress(&state)?;
     let ciphertext: Bytes = encrypt::encrypt(&plaintext, &recipient)?;
     let sig_bytes = sign::sign(&signing_key, &ciphertext);
-    let sig_hex = hex::encode(&sig_bytes);
+    let sig_payload = Bytes::from(hex::encode(&sig_bytes));
 
     let now = Utc::now();
     let ts = now.format("%Y-%m-%dT%H-%M-%SZ").to_string();
@@ -67,7 +67,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
         .await
         .context("put snapshot")?;
     primary
-        .put(&sig_key, Bytes::from(sig_hex.clone()))
+        .put(&sig_key, sig_payload.clone())
         .await
         .context("put signature")?;
 
@@ -84,6 +84,8 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let existing_etag = primary.head(LATEST_KEY).await?;
     match existing_etag {
         None => {
+            // Create-only via If-None-Match: * so two concurrent seeds can't
+            // both think they're the first writer and race to clobber each other.
             primary
                 .put_if_unmodified(LATEST_KEY, pointer_bytes.clone(), None)
                 .await
@@ -97,7 +99,7 @@ pub async fn run(cfg: &Config) -> Result<()> {
     .context("put latest.json")?;
 
     stores::fanout(&mirrors, &object_key, ciphertext).await;
-    stores::fanout(&mirrors, &sig_key, Bytes::from(sig_hex)).await;
+    stores::fanout(&mirrors, &sig_key, sig_payload).await;
     stores::fanout(&mirrors, LATEST_KEY, pointer_bytes).await;
 
     tracing::info!(

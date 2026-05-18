@@ -7,16 +7,15 @@ use crate::secrets::AgeIdentity;
 use crate::snapshot::{verify_digest, LatestPointer, LATEST_KEY};
 use crate::stores;
 
-/// Verify the latest stored snapshot without launching Chromium.
+/// Read latest pointer from primary, verify digest + signature, decrypt, and
+/// confirm the inner StorageState parses. No browser, no canary, no writes.
 ///
-/// This exercises the persistence boundary end-to-end: latest pointer parsing,
-/// ciphertext digest, detached ed25519 signature, age decryption, and archive
-/// decoding. It intentionally does not run the HTTP canary because that belongs
-/// to the browser/session layer used by `run`.
+/// Output is a single line on stdout (`OK version=...`) so the command can
+/// double as a health-check probe in CI without log scraping.
 pub async fn run(cfg: &Config) -> Result<()> {
     let identity = AgeIdentity::take_from_env("HARNESS_AGE_IDENTITY")?.parse()?;
-    let verify_pubkey_hex =
-        std::fs::read_to_string(&cfg.crypto.verify_pubkey_file).with_context(|| {
+    let verify_pubkey_hex = std::fs::read_to_string(&cfg.crypto.verify_pubkey_file)
+        .with_context(|| {
             format!(
                 "read verify pubkey {}",
                 cfg.crypto.verify_pubkey_file.display()
@@ -26,7 +25,10 @@ pub async fn run(cfg: &Config) -> Result<()> {
 
     let primary = stores::build_store(cfg.primary()).await?;
 
-    let (pointer_bytes, _) = primary.get(LATEST_KEY).await.context("get latest.json")?;
+    let (pointer_bytes, _) = primary
+        .get(LATEST_KEY)
+        .await
+        .context("get latest.json")?;
     let pointer: LatestPointer =
         serde_json::from_slice(&pointer_bytes).context("parse latest.json")?;
 
@@ -49,12 +51,11 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let plaintext = encrypt::decrypt(&ciphertext, &identity)?;
     let state = archive::decompress(&plaintext)?;
 
-    tracing::info!(
-        version = %pointer.version,
-        object = %pointer.object,
-        cookies = state.cookies.len(),
-        origins = state.origins.len(),
-        "snapshot verified"
+    println!(
+        "OK version={} cookies={} created_at={}",
+        pointer.version,
+        state.cookies.len(),
+        pointer.created_at.to_rfc3339()
     );
     Ok(())
 }

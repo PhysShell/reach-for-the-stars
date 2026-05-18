@@ -1,5 +1,8 @@
 use anyhow::{Context, Result};
-use chromiumoxide::cdp::browser_protocol::network::{CookieParam, CookieSameSite, TimeSinceEpoch};
+use chromiumoxide::cdp::browser_protocol::network::{
+    CookieParam, CookieSameSite, TimeSinceEpoch,
+};
+use chromiumoxide::cdp::browser_protocol::page::AddScriptToEvaluateOnNewDocumentParams;
 use chromiumoxide::cdp::browser_protocol::storage::{
     ClearCookiesParams, GetCookiesParams, SetCookiesParams,
 };
@@ -45,6 +48,14 @@ pub struct KV {
     pub value: String,
 }
 
+// Injected before every document load to neutralise the most common bot-detection
+// signals. navigator.webdriver is the primary Cloudflare trigger; window.chrome
+// is checked by some SSO flows that expect a real Chrome environment.
+const STEALTH_SCRIPT: &str = r#"
+Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+if (!window.chrome) { window.chrome = { runtime: {} }; }
+"#;
+
 pub struct BrowserSession {
     browser: Browser,
     pump: JoinHandle<()>,
@@ -61,7 +72,10 @@ impl BrowserSession {
             .arg("--no-default-browser-check")
             .arg("--no-first-run")
             .arg("--disable-dev-shm-usage")
-            .arg("--disable-background-networking");
+            .arg("--disable-background-networking")
+            // Removes the `navigator.webdriver` flag and automation-mode indicators
+            // that Cloudflare and other bot-detection systems check.
+            .arg("--disable-blink-features=AutomationControlled");
 
         if !headless {
             builder = builder.with_head();
@@ -93,7 +107,15 @@ impl BrowserSession {
     }
 
     pub async fn open(&self, url: &str) -> Result<Page> {
-        let page = self.browser.new_page(url).await?;
+        // Open blank first so the stealth script is registered before any real
+        // page load; addScriptToEvaluateOnNewDocument only covers *future* navigations.
+        let page = self.browser.new_page("about:blank").await?;
+        page.execute(AddScriptToEvaluateOnNewDocumentParams::new(
+            STEALTH_SCRIPT.to_string(),
+        ))
+        .await
+        .context("inject stealth script")?;
+        page.goto(url).await.context("navigate")?;
         Ok(page)
     }
 

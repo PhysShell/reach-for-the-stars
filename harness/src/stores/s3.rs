@@ -159,14 +159,15 @@ impl SnapshotStore for S3Store {
             .collect())
     }
 
-    async fn delete_if_match(&self, key: &str, _etag: &str) -> Result<()> {
-        // R2 supports If-Match on DeleteObject; not all S3-compat backends do.
-        // Re-enable .if_match(_etag) once the SDK exposes it on DeleteObjectFluentBuilder
-        // and you have verified the backend honours it.
+    async fn delete_if_match(&self, key: &str, etag: &str) -> Result<()> {
+        // R2 and recent MinIO honour If-Match on DeleteObject. Older S3-compat
+        // backends may ignore the precondition silently — that's a backend
+        // bug, not ours; the lock TTL still provides a safety net.
         self.client
             .delete_object()
             .bucket(&self.bucket)
             .key(self.full_key(key))
+            .if_match(etag)
             .send()
             .await
             .context("s3 delete")?;

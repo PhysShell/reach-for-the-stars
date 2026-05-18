@@ -40,6 +40,7 @@ zstd = "0.13"
 tar = "0.4"
 bytes = "1.9"
 tempfile = "3.14"
+urlencoding = "2.1"
 
 [profile.release]
 strip = true
