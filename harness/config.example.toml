@@ -25,6 +25,14 @@ expected_status = 200
 # JSON pointer (RFC 6901) to a stable field that uniquely identifies your account.
 field = "/user/id"
 expected_value = "REPLACE_WITH_YOUR_USER_ID"
+# Optional. Defaults to a realistic desktop Chrome UA. Override if the target
+# fingerprints a specific UA. A bare HTTP-client UA often gets 403/404.
+# user_agent = "Mozilla/5.0 (...) Chrome/131.0.0.0 Safari/537.36"
+# Optional extra request headers. `Accept: application/json, text/plain, */*`
+# is sent by default; add Origin/Referer/etc here if the endpoint needs them.
+# [canary.headers]
+# Origin = "https://example.com"
+# Referer = "https://example.com/"
 
 [crypto]
 recipient_file = "age-recipient.txt"
@@ -60,21 +68,13 @@ name = "mirror-gh-release"
 repo = "owner/agent-state"
 token_env = "GITHUB_TOKEN"
 
-# Optional zero-vendor-lock mirror. Use a dedicated state branch; do not point
-# this at the branch that contains application source code.
+# Optional zero-vendor-lock mirror: pushes snapshots to a dedicated branch of
+# a git repo via --force-with-lease. Only needs a GITHUB_TOKEN (or any git
+# server token); no R2/B2/AWS keys. Use a DEDICATED state branch — do not
+# point this at the branch that contains application source code.
 # [[stores]]
 # kind = "git_branch"
 # name = "mirror-git-branch"
 # repo_url = "https://github.com/owner/agent-state.git"
 # branch = "agent-state"
 # token_env = "GITHUB_TOKEN"
-# Zero-vendor-lock mirror: pushes snapshots to a dedicated branch of a git
-# repo via --force-with-lease. Only needs a GITHUB_TOKEN (or any git server
-# token); no R2/B2/AWS keys involved. Add as a second mirror or use as the
-# sole primary if you want to escape S3-compat entirely.
-[[stores]]
-kind = "git_branch"
-name = "mirror-git-branch"
-repo_url = "https://github.com/owner/agent-state.git"
-branch = "state"
-token_env = "GITHUB_TOKEN"
