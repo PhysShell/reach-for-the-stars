@@ -49,4 +49,4 @@ jobs:
           RUST_LOG: harness=info
         run: |
           set +x
-          nix run .#harness -- run --config config.toml
+          nix run .#harness -- run
