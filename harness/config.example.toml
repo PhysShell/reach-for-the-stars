@@ -1,0 +1,80 @@
+# Copy to config.toml and fill in. Never commit config.toml.
+# TODO: direnv or regular env at least:
+#export HARNESS_AGE_IDENTITY=$(cat harness/.secrets/age-key.txt)
+#export HARNESS_SIGN_SECRET=$(cat harness/.secrets/sign-secret.hex)
+#export HARNESS_R2_ACCESS_KEY=<your key>
+#export HARNESS_R2_SECRET_KEY=<your secret>
+#export HARNESS_R2_ENDPOINT=<https://...r2.cloudflarestorage.com>
+#export HARNESS_R2_BUCKET=<bucket name>
+
+
+[browser]
+chromium_bin = "/run/current-system/sw/bin/chromium"
+user_data_dir = ".state-work/profile"
+headless = true
+
+[seed]
+# URL to land on for the interactive seed login.
+login_url = "https://example.com/login"
+
+[canary]
+# An authenticated JSON endpoint that returns a stable identity field.
+# Find it in DevTools → Network on the logged-in page (look for /api/me, /session, etc).
+url = "https://example.com/api/me"
+expected_status = 200
+# JSON pointer (RFC 6901) to a stable field that uniquely identifies your account.
+field = "/user/id"
+expected_value = "REPLACE_WITH_YOUR_USER_ID"
+
+[crypto]
+recipient_file = "age-recipient.txt"
+verify_pubkey_file = "sign-pubkey.hex"
+
+[lock]
+ttl_seconds = 1800
+
+# First store is the canonical source of truth. The rest are append-only mirrors.
+[[stores]]
+kind = "s3"
+name = "primary-r2"
+endpoint = "https://<account>.r2.cloudflarestorage.com"
+region = "auto"
+bucket = "agent-state"
+prefix = "state/"
+access_key_env = "HARNESS_R2_ACCESS_KEY"
+secret_key_env = "HARNESS_R2_SECRET_KEY"
+
+[[stores]]
+kind = "s3"
+name = "mirror-b2"
+endpoint = "https://s3.us-west-002.backblazeb2.com"
+region = "us-west-002"
+bucket = "agent-state-backup"
+prefix = "state/"
+access_key_env = "HARNESS_B2_ACCESS_KEY"
+secret_key_env = "HARNESS_B2_SECRET_KEY"
+
+[[stores]]
+kind = "github_release"
+name = "mirror-gh-release"
+repo = "owner/agent-state"
+token_env = "GITHUB_TOKEN"
+
+# Optional zero-vendor-lock mirror. Use a dedicated state branch; do not point
+# this at the branch that contains application source code.
+# [[stores]]
+# kind = "git_branch"
+# name = "mirror-git-branch"
+# repo_url = "https://github.com/owner/agent-state.git"
+# branch = "agent-state"
+# token_env = "GITHUB_TOKEN"
+# Zero-vendor-lock mirror: pushes snapshots to a dedicated branch of a git
+# repo via --force-with-lease. Only needs a GITHUB_TOKEN (or any git server
+# token); no R2/B2/AWS keys involved. Add as a second mirror or use as the
+# sole primary if you want to escape S3-compat entirely.
+[[stores]]
+kind = "git_branch"
+name = "mirror-git-branch"
+repo_url = "https://github.com/owner/agent-state.git"
+branch = "state"
+token_env = "GITHUB_TOKEN"
