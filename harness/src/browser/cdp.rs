@@ -63,11 +63,7 @@ pub struct BrowserSession {
 }
 
 impl BrowserSession {
-    pub async fn launch(
-        chromium_bin: &Path,
-        user_data_dir: &Path,
-        headless: bool,
-    ) -> Result<Self> {
+    pub async fn launch(chromium_bin: &Path, user_data_dir: &Path, headless: bool) -> Result<Self> {
         std::fs::create_dir_all(user_data_dir).context("create user_data_dir")?;
 
         let mut builder = BrowserConfig::builder()

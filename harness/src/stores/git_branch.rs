@@ -277,7 +277,14 @@ impl SnapshotStore for GitBranchStore {
         let new_sha = self
             .commit_and_push(
                 &dir,
-                &format!("harness: {} {key}", if expected_etag.is_some() { "update" } else { "create" }),
+                &format!(
+                    "harness: {} {key}",
+                    if expected_etag.is_some() {
+                        "update"
+                    } else {
+                        "create"
+                    }
+                ),
                 current.as_deref(),
             )
             .await?;
@@ -303,8 +310,8 @@ impl SnapshotStore for GitBranchStore {
         let dir = self.workdir().await?.to_path_buf();
         let _ = self.fetch_and_reset(&dir).await?;
         let target = Self::safe_path(&dir, key)?;
-        let bytes =
-            std::fs::read(&target).with_context(|| format!("git_branch get {key}: file missing"))?;
+        let bytes = std::fs::read(&target)
+            .with_context(|| format!("git_branch get {key}: file missing"))?;
         let sha = self
             .current_sha(&dir)
             .await?

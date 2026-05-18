@@ -20,17 +20,16 @@ pub async fn run(cfg: &Config) -> Result<()> {
     for mirror_cfg in cfg.mirrors() {
         match stores::build_store(mirror_cfg).await {
             Ok(s) => mirrors.push(s),
-            Err(e) => tracing::warn!(store = mirror_cfg.name(), error = %e, "mirror unavailable, skipping"),
+            Err(e) => {
+                tracing::warn!(store = mirror_cfg.name(), error = %e, "mirror unavailable, skipping")
+            }
         }
     }
 
     tracing::info!(url = %cfg.seed.login_url, "launching headed browser");
-    let session = BrowserSession::launch(
-        &cfg.browser.chromium_bin,
-        &cfg.browser.user_data_dir,
-        false,
-    )
-    .await?;
+    let session =
+        BrowserSession::launch(&cfg.browser.chromium_bin, &cfg.browser.user_data_dir, false)
+            .await?;
     let _page = session.open(&cfg.seed.login_url).await?;
 
     eprintln!();
@@ -103,6 +102,9 @@ pub async fn run(cfg: &Config) -> Result<()> {
     stores::fanout(&mirrors, &sig_key, sig_payload).await;
     stores::fanout(&mirrors, LATEST_KEY, pointer_bytes).await;
 
-    tracing::info!("seed complete: version={ts}, cookies={}", state.cookies.len());
+    tracing::info!(
+        "seed complete: version={ts}, cookies={}",
+        state.cookies.len()
+    );
     Ok(())
 }

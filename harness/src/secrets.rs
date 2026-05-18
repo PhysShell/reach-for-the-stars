@@ -40,10 +40,10 @@ pub struct StoreCredential {
 
 impl StoreCredential {
     pub fn take_from_env(access_var: &str, secret_var: &str) -> Result<Self> {
-        let ak = std::env::var(access_var)
-            .with_context(|| format!("env var {access_var} not set"))?;
-        let sk = std::env::var(secret_var)
-            .with_context(|| format!("env var {secret_var} not set"))?;
+        let ak =
+            std::env::var(access_var).with_context(|| format!("env var {access_var} not set"))?;
+        let sk =
+            std::env::var(secret_var).with_context(|| format!("env var {secret_var} not set"))?;
         std::env::remove_var(access_var);
         std::env::remove_var(secret_var);
         Ok(Self {

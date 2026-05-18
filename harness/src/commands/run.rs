@@ -26,8 +26,8 @@ pub async fn run(cfg: &Config) -> Result<()> {
     let recipient = encrypt::read_recipient(&cfg.crypto.recipient_file)?;
     let signing_key_raw = MinisignKey::take_from_env("HARNESS_SIGN_SECRET")?;
     let signing_key = sign::parse_signing_key(signing_key_raw.expose())?;
-    let verify_pubkey_hex = std::fs::read_to_string(&cfg.crypto.verify_pubkey_file)
-        .with_context(|| {
+    let verify_pubkey_hex =
+        std::fs::read_to_string(&cfg.crypto.verify_pubkey_file).with_context(|| {
             format!(
                 "read verify pubkey {}",
                 cfg.crypto.verify_pubkey_file.display()
