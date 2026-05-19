@@ -8,3 +8,4 @@ pub mod lock;
 pub mod secrets;
 pub mod snapshot;
 pub mod stores;
+pub mod workload;

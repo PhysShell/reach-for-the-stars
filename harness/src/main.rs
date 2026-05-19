@@ -31,6 +31,8 @@ enum Cmd {
     Run,
     /// Verify the latest snapshot decrypts and signature is valid (no browser).
     Verify,
+    /// Export one ChatGPT conversation via the backend API (test mode).
+    Export,
 }
 
 #[tokio::main]
@@ -50,6 +52,7 @@ async fn main() -> Result<()> {
         Cmd::Seed => harness::commands::seed::run(&Config::load(&cli.config)?).await,
         Cmd::Run => harness::commands::run::run(&Config::load(&cli.config)?).await,
         Cmd::Verify => harness::commands::verify::run(&Config::load(&cli.config)?).await,
+        Cmd::Export => harness::commands::export::run(&Config::load(&cli.config)?).await,
     }
 }
 

@@ -11,6 +11,8 @@ pub struct Config {
     pub crypto: Crypto,
     pub lock: LockCfg,
     pub stores: Vec<StoreCfg>,
+    #[serde(default)]
+    pub export: ExportCfg,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,3 +158,34 @@ pub fn default_user_agent() -> String {
      Chrome/131.0.0.0 Safari/537.36"
         .to_string()
 }
+
+#[derive(Debug, Deserialize)]
+pub struct ExportCfg {
+    #[serde(default = "default_chatgpt_base_url")]
+    pub chatgpt_base_url: String,
+    /// Minimum delay between consecutive API calls (ms).
+    #[serde(default = "default_rate_limit_delay_ms")]
+    pub rate_limit_delay_ms: u64,
+    /// Max retries on HTTP 429 before giving up.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// Object-store key prefix for exported files.
+    #[serde(default = "default_export_prefix")]
+    pub prefix: String,
+}
+
+impl Default for ExportCfg {
+    fn default() -> Self {
+        Self {
+            chatgpt_base_url: default_chatgpt_base_url(),
+            rate_limit_delay_ms: default_rate_limit_delay_ms(),
+            max_retries: default_max_retries(),
+            prefix: default_export_prefix(),
+        }
+    }
+}
+
+fn default_chatgpt_base_url() -> String { "https://chatgpt.com".into() }
+fn default_rate_limit_delay_ms() -> u64 { 2000 }
+fn default_max_retries() -> u32 { 5 }
+fn default_export_prefix() -> String { "exports/".into() }
