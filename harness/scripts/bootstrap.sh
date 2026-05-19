@@ -65,7 +65,8 @@ read -rsp "R2 Secret Access Key:     " R2_SK; echo
 read -rp "R2 Endpoint URL:          " R2_ENDPOINT
 read -rp "R2 Bucket:                " R2_BUCKET
 
-gh secret set HARNESS_AGE_IDENTITY  --repo "$GH_REPO" < "$SECRETS_DIR/age-key.txt"
+grep '^AGE-SECRET-KEY' "$SECRETS_DIR/age-key.txt" \
+  | gh secret set HARNESS_AGE_IDENTITY --repo "$GH_REPO"
 gh secret set HARNESS_SIGN_SECRET   --repo "$GH_REPO" < "$SECRETS_DIR/sign-secret.hex"
 printf '%s' "$R2_AK"       | gh secret set HARNESS_R2_ACCESS_KEY --repo "$GH_REPO"
 printf '%s' "$R2_SK"       | gh secret set HARNESS_R2_SECRET_KEY --repo "$GH_REPO"
