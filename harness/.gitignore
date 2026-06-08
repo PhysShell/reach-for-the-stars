@@ -1,7 +1,0 @@
-/target
-/.cargo/config.toml
-/.state-work
-/.state-in
-/.secrets
-/config.toml
-*.age
