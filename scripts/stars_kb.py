@@ -6,7 +6,7 @@ CI (GITHUB_TOKEN set; output is plain gzip, the workflow encrypts it with age):
   python scripts/stars_kb.py full --stars assets/data/stars.json --out base.jsonl.gz
 
 Local (needs the age CLI >= 1.3 and the private key):
-  python scripts/stars_kb.py sync --key PATH/stars-kb.key [--repo OWNER/NAME] [--data DIR]
+  python scripts/stars_kb.py sync [--bw ITEM | --key PATH] [--repo OWNER/NAME] [--data DIR]
   python scripts/stars_kb.py import --corpus corpus.jsonl [--data DIR]
   python scripts/stars_kb.py search "beat detection" [-n 20] [--strict] [--license MIT]
   python scripts/stars_kb.py show owner/repo
@@ -17,6 +17,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -145,7 +146,18 @@ def http_json(url):
         return json.load(r)
 
 
+def read_key(a):
+    if a.key:
+        return Path(a.key).read_bytes()
+    bw = shutil.which("bw") or sys.exit("Bitwarden CLI `bw` not found on PATH")
+    r = subprocess.run([bw, "get", "notes", a.bw], capture_output=True)
+    if r.returncode or b"AGE-SECRET-KEY-" not in r.stdout:
+        sys.exit(f"bw get notes {a.bw} failed; run `bw unlock` and set BW_SESSION. {r.stderr.decode(errors='replace').strip()}")
+    return r.stdout
+
+
 def cmd_sync(a):
+    key = read_key(a)
     data = Path(a.data)
     enc = data / "encrypted"
     enc.mkdir(parents=True, exist_ok=True)
@@ -161,7 +173,7 @@ def cmd_sync(a):
         path = enc / x["name"]
         if not path.exists() or path.stat().st_size != x["size"]:
             urllib.request.urlretrieve(x["browser_download_url"], path)
-        plain = subprocess.run(["age", "-d", "-i", a.key, str(path)], capture_output=True, check=True).stdout
+        plain = subprocess.run(["age", "-d", "-i", "-", str(path)], input=key, capture_output=True, check=True).stdout
         for line in gzip.decompress(plain).decode("utf-8").split("\n"):
             if not line.strip():
                 continue
@@ -256,7 +268,8 @@ def main():
     s = sub.add_parser("list"); s.add_argument("--user", required=True); s.add_argument("--out", required=True)
     s = sub.add_parser("delta"); s.add_argument("--old"); s.add_argument("--new", required=True); s.add_argument("--out", required=True)
     s = sub.add_parser("full"); s.add_argument("--stars", required=True); s.add_argument("--out", required=True)
-    s = sub.add_parser("sync"); s.add_argument("--key", required=True); s.add_argument("--repo", default="PhysShell/reach-for-the-stars")
+    s = sub.add_parser("sync"); s.add_argument("--repo", default="PhysShell/reach-for-the-stars")
+    k = s.add_mutually_exclusive_group(); k.add_argument("--key"); k.add_argument("--bw", default="stars-kb")
     s = sub.add_parser("import"); s.add_argument("--corpus", required=True)
     s = sub.add_parser("search"); s.add_argument("query"); s.add_argument("-n", type=int, default=20)
     s.add_argument("--strict", action="store_true"); s.add_argument("--license")

@@ -42,10 +42,12 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
 
 - **Nightly** (`reach-for-the-stars.yml`): after `stars.json` is updated, the repositories that are new since the previous `stars.json` are fetched through GraphQL. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
 - **Rebase** (`stars-kb-rebase.yml`, manual): fetches every starred repository again, uploads `base-<timestamp>.jsonl.gz.age`, and deletes older files. Use it to refresh star counts and dates, or after replacing a lost key.
-- **Locally**, with the age CLI ≥ 1.3 on `PATH`:
+- **Locally**, with the age CLI ≥ 1.3 and the Bitwarden CLI (`bw`) on `PATH`. The private key is the notes field of the Bitwarden item `stars-kb`; it is piped to age and never written to disk.
 
   ```bash
-  python scripts/stars_kb.py sync --key path/to/stars-kb.key   # download, decrypt base + deltas, build .stars-kb/stars.db
+  export BW_SESSION=$(bw unlock --raw)
+  python scripts/stars_kb.py sync                              # download, decrypt base + deltas, build .stars-kb/stars.db
+  python scripts/stars_kb.py sync --key path/to/stars-kb.key   # or read the key from a file
   python scripts/stars_kb.py search "beat detection" -n 20
   python scripts/stars_kb.py search "matting" --strict --license MIT
   python scripts/stars_kb.py show owner/repo
@@ -57,6 +59,7 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
 **New or lost key:**
 1. Run `age-keygen -pq -o stars-kb.key`.
 2. Put the `# public key:` line (without the prefix) into `assets/stars-kb.pub`.
-3. Run the rebase workflow.
+3. Replace the notes of the Bitwarden item `stars-kb` with the contents of `stars-kb.key`, then delete the file.
+4. Run the rebase workflow.
 
 Files encrypted to the old key become unreadable and are deleted by the rebase.
