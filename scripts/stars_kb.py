@@ -133,7 +133,9 @@ def cmd_sync(a):
         if not path.exists() or path.stat().st_size != x["size"]:
             urllib.request.urlretrieve(x["browser_download_url"], path)
         plain = subprocess.run(["age", "-d", "-i", a.key, str(path)], capture_output=True, check=True).stdout
-        for line in gzip.decompress(plain).decode("utf-8").splitlines():
+        for line in gzip.decompress(plain).decode("utf-8").split("\n"):
+            if not line.strip():
+                continue
             r = json.loads(line)
             rows[r["repo"].lower()] = r
         print(f"{x['name']}: {len(rows)} repos so far", file=sys.stderr)
