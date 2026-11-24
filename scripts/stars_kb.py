@@ -1,6 +1,7 @@
 """Encrypted knowledge base of a user's GitHub stars.
 
 CI (GITHUB_TOKEN set; output is plain gzip, the workflow encrypts it with age):
+  python scripts/stars_kb.py list --user NAME --out assets/data/stars.json
   python scripts/stars_kb.py delta --old OLD.json --new assets/data/stars.json --out delta.jsonl.gz
   python scripts/stars_kb.py full --stars assets/data/stars.json --out base.jsonl.gz
 
@@ -34,6 +35,34 @@ FIELDS = ("nameWithOwner description stargazerCount pushedAt isArchived primaryL
           "a:object(expression:\"HEAD:README.md\"){...on Blob{text}} "
           "b:object(expression:\"HEAD:readme.md\"){...on Blob{text}} "
           "c:object(expression:\"HEAD:README.rst\"){...on Blob{text}}")
+
+
+def cmd_list(a):
+    token = os.environ["GITHUB_TOKEN"]
+    stars, after = [], ""
+    while True:
+        q = ('query{user(login:%s){starredRepositories(first:100, orderBy:{field:STARRED_AT, direction:DESC}%s)'
+             '{totalCount pageInfo{hasNextPage endCursor} edges{starredAt node{nameWithOwner url description '
+             'stargazerCount forkCount pushedAt primaryLanguage{name color}}}}}}') % (json.dumps(a.user), after)
+        page = graphql(q, token)
+        conn = ((page or {}).get("data") or {}).get("user", {}).get("starredRepositories")
+        if not conn:
+            sys.exit(f"starred list failed: {json.dumps(page)[:300]}")
+        for e in conn["edges"]:
+            n = e["node"]
+            stars.append({"repo": n["nameWithOwner"], "link": n["url"], "description": n["description"] or "",
+                          "stars": n["stargazerCount"], "forks": n["forkCount"],
+                          "language": (n["primaryLanguage"] or {}).get("name"),
+                          "language_color": (n["primaryLanguage"] or {}).get("color"),
+                          "updated": n["pushedAt"], "starred_at": e["starredAt"]})
+        if not conn["pageInfo"]["hasNextPage"]:
+            break
+        after = ", after:" + json.dumps(conn["pageInfo"]["endCursor"])
+    if len(stars) < conn["totalCount"] * 0.99:
+        sys.exit(f"listed {len(stars)} of {conn['totalCount']} stars; not writing a partial list")
+    out = {"username": a.user, "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "stars": stars}
+    Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"{len(stars)} stars -> {a.out}", file=sys.stderr)
 
 
 def repo_names(stars_json):
@@ -224,6 +253,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--data", default=str(DEFAULT_DATA))
     sub = p.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("list"); s.add_argument("--user", required=True); s.add_argument("--out", required=True)
     s = sub.add_parser("delta"); s.add_argument("--old"); s.add_argument("--new", required=True); s.add_argument("--out", required=True)
     s = sub.add_parser("full"); s.add_argument("--stars", required=True); s.add_argument("--out", required=True)
     s = sub.add_parser("sync"); s.add_argument("--key", required=True); s.add_argument("--repo", default="PhysShell/reach-for-the-stars")
@@ -233,7 +263,7 @@ def main():
     s = sub.add_parser("show"); s.add_argument("repo")
     sub.add_parser("stats")
     a = p.parse_args()
-    {"delta": cmd_delta, "full": cmd_full, "sync": cmd_sync, "import": cmd_import,
+    {"list": cmd_list, "delta": cmd_delta, "full": cmd_full, "sync": cmd_sync, "import": cmd_import,
      "search": cmd_search, "show": cmd_show, "stats": cmd_stats}[a.cmd](a)
 
 
