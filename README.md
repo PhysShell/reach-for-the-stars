@@ -1,10 +1,4 @@
-# Prologue
-
-Based on great simple project by @taylow: https://taylo.dev/posts/adding-github-stars-to-my-site.
-
-If it's not appropriate for me to have this repo (license issues, etc.) then contact me here in and I'd gladly remove it.
-
-For now I used MIT license as it's used the most and hope that I won't get sued
+Idea from @taylow's post: https://taylo.dev/posts/adding-github-stars-to-my-site.
 
 # GitHub Stars
 
