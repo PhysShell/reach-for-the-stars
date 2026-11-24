@@ -1,0 +1,42 @@
+name: Stars knowledge base rebase
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v4
+
+      - name: setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: fetch every starred repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/stars_kb.py full --stars assets/data/stars.json --out "$RUNNER_TEMP/base.jsonl.gz"
+
+      - name: encrypt, upload and prune
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go install filippo.io/age/cmd/age@v1.3.1
+          name="base-$(date -u +%Y%m%dT%H%M%S).jsonl.gz.age"
+          "$(go env GOPATH)/bin/age" -R assets/stars-kb.pub -o "$RUNNER_TEMP/$name" "$RUNNER_TEMP/base.jsonl.gz"
+          gh release view stars-kb >/dev/null 2>&1 || gh release create stars-kb --title "Stars knowledge base (encrypted)" --notes "age (ML-KEM-768 + X25519) encrypted corpus of starred repositories. See scripts/stars_kb.py."
+          gh release upload stars-kb "$RUNNER_TEMP/$name"
+          gh release view stars-kb --json assets --jq '.assets[].name' | grep -E '^(base|delta)-.*\.jsonl\.gz\.age$' | grep -vx "$name" | while read -r old; do gh release delete-asset stars-kb "$old" --yes; done
