@@ -68,3 +68,30 @@ pipenv run pytest
   ]
 }
 ```
+
+## Stars knowledge base (encrypted)
+
+`scripts/stars_kb.py` keeps a searchable SQLite database of every starred repository: description, topics, license, stars, last push, language, and the first 8000 characters of the README, with a full-text index.
+
+The data lives in the `stars-kb` release as files encrypted with [age](https://age-encryption.org) to a post-quantum hybrid recipient (ML-KEM-768 + X25519, `age-keygen -pq`). The public recipient is `assets/stars-kb.pub`. Only the owner of the matching private key can read the files, and the private key is never stored in GitHub.
+
+- **Nightly** (`reach-for-the-stars.yml`): after `stars.json` is updated, the repositories that are new since the previous `stars.json` are fetched through GraphQL. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
+- **Rebase** (`stars-kb-rebase.yml`, manual): fetches every starred repository again, uploads `base-<timestamp>.jsonl.gz.age`, and deletes older files. Use it to refresh star counts and dates, or after replacing a lost key.
+- **Locally**, with the age CLI ≥ 1.3 on `PATH`:
+
+  ```bash
+  python scripts/stars_kb.py sync --key path/to/stars-kb.key   # download, decrypt base + deltas, build .stars-kb/stars.db
+  python scripts/stars_kb.py search "beat detection" -n 20
+  python scripts/stars_kb.py search "matting" --strict --license MIT
+  python scripts/stars_kb.py show owner/repo
+  python scripts/stars_kb.py stats
+  ```
+
+  Repositories that are no longer in `stars.json` are dropped during `sync`.
+
+**New or lost key:**
+1. Run `age-keygen -pq -o stars-kb.key`.
+2. Put the `# public key:` line (without the prefix) into `assets/stars-kb.pub`.
+3. Run the rebase workflow.
+
+Files encrypted to the old key become unreadable and are deleted by the rebase.

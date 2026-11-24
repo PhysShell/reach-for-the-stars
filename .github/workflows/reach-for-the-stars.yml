@@ -25,6 +25,9 @@ jobs:
       - name: install python packages
         run: pipenv install --skip-lock
 
+      - name: keep previous stars
+        run: cp assets/data/stars.json "$RUNNER_TEMP/stars.old.json"
+
       - name: scrape stars
         env:
           GITHUB_USERNAME: ${{ github.repository_owner }}
@@ -42,3 +45,27 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           branch: main
+
+      - name: fetch new stars for the knowledge base
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/stars_kb.py delta --old "$RUNNER_TEMP/stars.old.json" --new assets/data/stars.json --out "$RUNNER_TEMP/delta.jsonl.gz"
+
+      - name: setup go
+        if: hashFiles('assets/stars-kb.pub') != ''
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: false
+
+      - name: encrypt and upload delta
+        if: hashFiles('assets/stars-kb.pub') != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -s "$RUNNER_TEMP/delta.jsonl.gz" ] || { echo "no new stars"; exit 0; }
+          go install filippo.io/age/cmd/age@v1.3.1
+          name="delta-$(date -u +%Y%m%dT%H%M%S).jsonl.gz.age"
+          "$(go env GOPATH)/bin/age" -R assets/stars-kb.pub -o "$RUNNER_TEMP/$name" "$RUNNER_TEMP/delta.jsonl.gz"
+          gh release view stars-kb >/dev/null 2>&1 || gh release create stars-kb --title "Stars knowledge base (encrypted)" --notes "age (ML-KEM-768 + X25519) encrypted corpus of starred repositories. See scripts/stars_kb.py."
+          gh release upload stars-kb "$RUNNER_TEMP/$name"
