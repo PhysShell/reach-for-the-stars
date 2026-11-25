@@ -40,7 +40,7 @@ FIELDS = ("nameWithOwner description stargazerCount pushedAt isArchived primaryL
 
 def cmd_list(a):
     token = os.environ["GITHUB_TOKEN"]
-    stars, after = [], ""
+    stars, after, totals = [], "", set()
     while True:
         q = ('query{user(login:%s){starredRepositories(first:100, orderBy:{field:STARRED_AT, direction:DESC}%s)'
              '{totalCount pageInfo{hasNextPage endCursor} edges{starredAt node{nameWithOwner url description '
@@ -49,6 +49,7 @@ def cmd_list(a):
         conn = ((page or {}).get("data") or {}).get("user", {}).get("starredRepositories")
         if not conn:
             sys.exit(f"starred list failed: {json.dumps(page)[:300]}")
+        totals.add(conn["totalCount"])
         for e in conn["edges"]:
             n = e["node"]
             stars.append({"repo": n["nameWithOwner"], "link": n["url"], "description": n["description"] or "",
@@ -59,8 +60,10 @@ def cmd_list(a):
         if not conn["pageInfo"]["hasNextPage"]:
             break
         after = ", after:" + json.dumps(conn["pageInfo"]["endCursor"])
-    if len(stars) < conn["totalCount"] * 0.99:
-        sys.exit(f"listed {len(stars)} of {conn['totalCount']} stars; not writing a partial list")
+    unique = len({s["repo"].lower() for s in stars})
+    if len(totals) != 1 or unique != len(stars) or unique != conn["totalCount"]:
+        sys.exit(f"listed {unique} unique of {len(stars)} rows, totalCount {sorted(totals)}; "
+                 "stars changed during listing or the list is incomplete, not writing it")
     out = {"username": a.user, "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "stars": stars}
     Path(a.out).write_text(json.dumps(out, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"{len(stars)} stars -> {a.out}", file=sys.stderr)
@@ -111,8 +114,13 @@ def fetch(repos, token):
         chunk = repos[i:i + BATCH]
         q = "query{" + " ".join(f'r{k}:repository(owner:{json.dumps(o)},name:{json.dumps(n)}){{{FIELDS}}}'
                                 for k, (o, n) in enumerate(r.split("/", 1) for r in chunk)) + "}"
-        data = (graphql(q, token) or {}).get("data") or {}
-        rows += [to_row(d) for d in data.values() if d]
+        resp = graphql(q, token) or {}
+        data = resp.get("data") or {}
+        bad = [r for k, r in enumerate(chunk) if not data.get(f"r{k}")]
+        if bad or resp.get("errors"):
+            sys.exit(f"{len(bad)} of {len(chunk)} repositories not returned ({', '.join(bad[:5])}); "
+                     f"errors: {json.dumps(resp.get('errors'))[:300]}")
+        rows += [dict(to_row(data[f"r{k}"]), repo=r) for k, r in enumerate(chunk)]
         print(f"fetched {min(i + BATCH, len(repos))}/{len(repos)}", file=sys.stderr)
     return rows
 
@@ -167,7 +175,7 @@ def cmd_sync(a):
     if not bases:
         sys.exit("no base-*.jsonl.gz.age in the release; run the rebase workflow or `import` first")
     base = bases[-1]
-    chain = [base] + [x for x in assets if x["name"].startswith("delta-") and x["name"][6:] > base["name"][5:]]
+    chain = [base] + [x for x in assets if x["name"].startswith("delta-") and x["name"][6:] >= base["name"][5:]]
     rows = {}
     for x in chain:
         path = enc / x["name"]
@@ -181,6 +189,10 @@ def cmd_sync(a):
             rows[r["repo"].lower()] = r
         print(f"{x['name']}: {len(rows)} repos so far", file=sys.stderr)
     live = repo_names_from_url(f"https://raw.githubusercontent.com/{a.repo}/main/assets/data/stars.json")
+    missing = sorted(live - rows.keys())
+    if missing:
+        sys.exit(f"{len(missing)} starred repositories are not in the release ({', '.join(missing[:5])}); "
+                 "local database left unchanged. Wait for the nightly run or run the rebase workflow.")
     kept = [r for k, r in rows.items() if k in live]
     corpus = data / "corpus.jsonl"
     with open(corpus, "w", encoding="utf-8") as f:

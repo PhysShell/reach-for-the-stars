@@ -6,13 +6,19 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: stars-kb-writer
+  cancel-in-progress: false
+
 jobs:
   rebase:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     steps:
       - name: checkout code
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: setup python
         uses: actions/setup-python@v5
@@ -38,5 +44,6 @@ jobs:
           name="base-$(date -u +%Y%m%dT%H%M%S).jsonl.gz.age"
           "$(go env GOPATH)/bin/age" -R assets/stars-kb.pub -o "$RUNNER_TEMP/$name" "$RUNNER_TEMP/base.jsonl.gz"
           gh release view stars-kb >/dev/null 2>&1 || gh release create stars-kb --title "Stars knowledge base (encrypted)" --notes "age (ML-KEM-768 + X25519) encrypted corpus of starred repositories. See scripts/stars_kb.py."
+          old=$(gh release view stars-kb --json assets --jq '.assets[].name' | grep -E '^(base|delta)-.*\.jsonl\.gz\.age$' || true)
           gh release upload stars-kb "$RUNNER_TEMP/$name"
-          gh release view stars-kb --json assets --jq '.assets[].name' | grep -E '^(base|delta)-.*\.jsonl\.gz\.age$' | grep -vx "$name" | while read -r old; do gh release delete-asset stars-kb "$old" --yes; done
+          for f in $old; do gh release delete-asset stars-kb "$f" --yes; done

@@ -54,7 +54,9 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
   python scripts/stars_kb.py stats
   ```
 
-  Repositories that are no longer in `stars.json` are dropped during `sync`.
+  Repositories that are no longer in `stars.json` are dropped during `sync`. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
+
+The nightly run pushes `stars.json` only after its delta is in the release, and both workflows share one concurrency group, so a failed run is redone by the next one. A GraphQL batch with errors or missing repositories fails the run instead of writing a partial file.
 
 **New or lost key:**
 1. Run `age-keygen -pq -o stars-kb.key`.
