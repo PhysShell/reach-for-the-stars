@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import stars_kb as kb
 
 
-def repo(name):
-    return {"nameWithOwner": name, "description": "d", "stargazerCount": 1, "pushedAt": "2026-01-01T00:00:00Z",
+def repo(name, gid=None):
+    return {"databaseId": gid or abs(hash(name)) % 10**9, "nameWithOwner": name, "description": "d", "stargazerCount": 1, "pushedAt": "2026-01-01T00:00:00Z",
             "isArchived": False, "primaryLanguage": None, "licenseInfo": None,
             "repositoryTopics": {"nodes": []}, "a": {"text": "readme"}, "b": None, "c": None}
 
@@ -32,11 +32,16 @@ class Fetch(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_fetch({"data": {"r0": repo("o/a")}})
 
-    def test_not_found_is_marked_deleted(self):
+    def test_not_found_is_marked_unavailable(self):
         rows = self.run_fetch({"data": {"r0": repo("o/a"), "r1": None},
                                "errors": [{"type": "NOT_FOUND", "path": ["r1"]}]})
         self.assertEqual(rows[1]["repo"], "o/b")
-        self.assertEqual(rows[1]["status"], "deleted")
+        self.assertEqual(rows[1]["status"], "unavailable")
+
+    def test_not_found_together_with_rate_limit_fails(self):
+        with self.assertRaises(SystemExit):
+            self.run_fetch({"data": {"r0": None, "r1": None},
+                            "errors": [{"type": "NOT_FOUND", "path": ["r0"]}, {"type": "RATE_LIMITED"}]})
 
     def test_null_with_other_error_fails(self):
         with self.assertRaises(SystemExit):
@@ -64,16 +69,17 @@ class Delta(unittest.TestCase):
         old = stars(tmp / "old.json", ["o/keep", "o/gone", "o/moved", "o/unstar"])
         new = stars(tmp / "new.json", ["o/keep", "o/new"])
         answers = [{"data": {"r0": repo("o/new")}},
-                   {"data": {"r0": None, "r1": {"nameWithOwner": "x/moved"}, "r2": {"nameWithOwner": "o/unstar"}},
+                   {"data": {"r0": None, "r1": {"databaseId": 7, "nameWithOwner": "x/moved"},
+                             "r2": {"databaseId": 8, "nameWithOwner": "o/unstar"}},
                     "errors": [{"type": "NOT_FOUND", "path": ["r0"]}]}]
         out = tmp / "d.jsonl.gz"
         with mock.patch.object(kb, "graphql", side_effect=answers), mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t"}):
             kb.cmd_delta(argparse.Namespace(old=old, new=new, out=str(out)))
         rows = {r["repo"]: r for r in map(json.loads, gzip.decompress(out.read_bytes()).decode().splitlines())}
         self.assertNotIn("status", rows["o/new"])
-        self.assertEqual(rows["o/gone"]["status"], "deleted")
+        self.assertEqual(rows["o/gone"]["status"], "unavailable")
         self.assertEqual((rows["o/moved"]["status"], rows["o/moved"]["renamed_to"]), ("renamed", "x/moved"))
-        self.assertEqual(rows["o/unstar"]["status"], "unstarred")
+        self.assertEqual((rows["o/unstar"]["status"], rows["o/unstar"]["id"]), ("unstarred", 8))
 
 
 def star_page(names, total, more, cursor="c"):
@@ -138,19 +144,28 @@ class Sync(unittest.TestCase):
         return set(self.status())
 
     def status(self):
+        return dict(self.db().execute("SELECT repo, status FROM repo"))
+
+    def db(self):
+        import contextlib
         import sqlite3
-        return dict(sqlite3.connect(self.data / "stars.db").execute("SELECT repo, status FROM repo"))
+
+        class Q:
+            def execute(_, sql):
+                with contextlib.closing(sqlite3.connect(self.data / "stars.db")) as con:
+                    return con.execute(sql).fetchall()
+        return Q()
 
     def test_removed_repositories_are_kept_with_status(self):
         self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age",
                                   [{"repo": "o/a"}, {"repo": "o/b", "readme": "kept text"}, {"repo": "o/c"},
                                    {"repo": "o/d"}]),
                        self.asset("delta-20260102T000000.jsonl.gz.age",
-                                  [{"repo": "o/b", "status": "deleted"},
+                                  [{"repo": "o/b", "status": "unavailable"},
                                    {"repo": "o/c", "status": "renamed", "renamed_to": "x/c"},
                                    {"repo": "x/c"}])],
                       ["o/a", "x/c"])
-        self.assertEqual(self.status(), {"o/a": "starred", "o/b": "deleted", "o/c": "renamed",
+        self.assertEqual(self.status(), {"o/a": "starred", "o/b": "unavailable", "o/c": "renamed",
                                          "o/d": "unstarred", "x/c": "starred"})
         import sqlite3
         con = sqlite3.connect(self.data / "stars.db")
@@ -182,6 +197,50 @@ class Sync(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_sync([self.asset("base-20260102T000000.jsonl.gz.age", [{"repo": "o/a"}])], ["o/a", "o/b"])
         self.assertEqual(self.indexed(), {"o/a"})
+
+
+    def test_reused_name_keeps_two_histories(self):
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "first"}]),
+                       self.asset("delta-20260102T000000.jsonl.gz.age",
+                                  [{"repo": "o/p", "status": "renamed", "id": 1, "renamed_to": "o/q"}]),
+                       self.asset("delta-20260103T000000.jsonl.gz.age", [{"repo": "o/p", "id": 2, "readme": "second"}])],
+                      ["o/p"])
+        rows = sorted(self.db().execute("SELECT repo, gh_id, status, readme FROM repo"))
+        self.assertEqual(rows, [("o/p", 1, "renamed", "first"), ("o/p", 2, "starred", "second")])
+
+    def test_rename_followed_by_new_name_is_one_record(self):
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "x"}]),
+                       self.asset("delta-20260102T000000.jsonl.gz.age",
+                                  [{"repo": "n/p", "id": 1, "readme": "y"},
+                                   {"repo": "o/p", "status": "renamed", "id": 1, "renamed_to": "n/p"}])],
+                      ["n/p"])
+        self.assertEqual(self.status(), {"n/p": "starred"})
+
+    def test_legacy_row_without_id_joins_its_id(self):
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "readme": "old"}]),
+                       self.asset("delta-20260102T000000.jsonl.gz.age", [{"repo": "o/p", "status": "unstarred", "id": 5}])],
+                      [])
+        self.assertEqual(list(self.db().execute("SELECT repo, gh_id, status, readme FROM repo")),
+                         [("o/p", 5, "unstarred", "old")])
+
+    def test_unavailable_then_starred_again(self):
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "kept"}]),
+                       self.asset("delta-20260102T000000.jsonl.gz.age", [{"repo": "o/p", "status": "unavailable"}])],
+                      [])
+        self.assertEqual(list(self.db().execute("SELECT status, readme FROM repo")), [("unavailable", "kept")])
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "kept"}]),
+                       self.asset("delta-20260102T000000.jsonl.gz.age", [{"repo": "o/p", "status": "unavailable"}]),
+                       self.asset("delta-20260103T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "back"}])],
+                      ["o/p"])
+        self.assertEqual(list(self.db().execute("SELECT status, readme FROM repo")), [("starred", "back")])
+
+    def test_sync_twice_gives_same_database(self):
+        assets = [self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/a", "id": 1}, {"repo": "o/b", "id": 2}]),
+                  self.asset("delta-20260102T000000.jsonl.gz.age", [{"repo": "o/b", "status": "unstarred", "id": 2}])]
+        self.run_sync(assets, ["o/a"])
+        first = list(self.db().execute("SELECT * FROM repo ORDER BY rid"))
+        self.run_sync(assets, ["o/a"])
+        self.assertEqual(list(self.db().execute("SELECT * FROM repo ORDER BY rid")), first)
 
 
 if __name__ == "__main__":

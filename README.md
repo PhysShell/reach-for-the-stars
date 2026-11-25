@@ -40,7 +40,7 @@ Output shape:
 
 The data lives in the `stars-kb` release as files encrypted with [age](https://age-encryption.org) to a post-quantum hybrid recipient (ML-KEM-768 + X25519, `age-keygen -pq`). The public recipient is `assets/stars-kb.pub`. Only the owner of the matching private key can read the files, and the private key is never stored in GitHub.
 
-- **Nightly** (`reach-for-the-stars.yml`): the repositories that are new since the previous `stars.json` are fetched through GraphQL, and the ones that left the list are checked and marked `unstarred`, `deleted` or `renamed`. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
+- **Nightly** (`reach-for-the-stars.yml`): the repositories that are new since the previous `stars.json` are fetched through GraphQL, and the ones that left the list are checked and marked `unstarred`, `unavailable` or `renamed`. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
 - **Rebase** (`stars-kb-rebase.yml`, manual): fetches every starred repository again, and uploads `base-<timestamp>.jsonl.gz.age`. Older files stay, so repositories that are no longer starred keep their data. Use it to refresh star counts and dates, or after replacing a lost key.
 - **Locally**, with the age CLI ≥ 1.3 and the Bitwarden CLI (`bw`) on `PATH`. The private key is the notes field of the Bitwarden item `stars-kb`; it is piped to age and never written to disk.
 
@@ -55,7 +55,7 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
   python scripts/stars_kb.py stats
   ```
 
-  Nothing is dropped: every repository ever stored has a status, `starred`, `unstarred`, `deleted` (not found on GitHub) or `renamed`, shown by `search`, `show` and `stats`. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
+  Nothing is dropped: every repository ever stored has a status, `starred`, `unstarred`, `unavailable` (GitHub answers "not found": deleted, made private or blocked) or `renamed`, shown by `search`, `show` and `stats`. Records are keyed by GitHub's repository id, so a name that another repository takes over after a rename keeps both histories. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
 
 The nightly run pushes `stars.json` only after its delta is in the release, and both workflows share one concurrency group, so a failed run is redone by the next one. A GraphQL batch with errors or missing repositories fails the run instead of writing a partial file.
 
@@ -64,3 +64,5 @@ The nightly run pushes `stars.json` only after its delta is in the release, and 
 2. Put the `# public key:` line (without the prefix) into `assets/stars-kb.pub`.
 3. Replace the notes of the Bitwarden item `stars-kb` with the contents of `stars-kb.key`, then delete the file.
 4. Delete the old `base-*` and `delta-*` files from the `stars-kb` release (`sync` cannot read them any more), then run the rebase workflow. History kept under the old key is lost with it.
+
+**Limit:** a release holds at most 1000 files, about 2.7 years of nightly deltas. Before that, deltas need compacting locally: decrypt everything, merge, check coverage, upload one encrypted base, delete the old files. The same step would carry history across a key change.

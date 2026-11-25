@@ -31,7 +31,7 @@ DEFAULT_DATA = ROOT / ".stars-kb"
 RELEASE_TAG = "stars-kb"
 BATCH = 50
 README_LIMIT = 8000
-FIELDS = ("nameWithOwner description stargazerCount pushedAt isArchived primaryLanguage{name} "
+FIELDS = ("databaseId nameWithOwner description stargazerCount pushedAt isArchived primaryLanguage{name} "
           "licenseInfo{spdxId} repositoryTopics(first:20){nodes{topic{name}}} "
           "a:object(expression:\"HEAD:README.md\"){...on Blob{text}} "
           "b:object(expression:\"HEAD:readme.md\"){...on Blob{text}} "
@@ -87,7 +87,7 @@ def readme_text(raw):
 
 def to_row(d):
     raw = next((d[k]["text"] for k in "abc" if d.get(k) and d[k].get("text")), "")
-    return {"repo": d["nameWithOwner"], "desc": d["description"] or "",
+    return {"repo": d["nameWithOwner"], "id": d["databaseId"], "desc": d["description"] or "",
             "topics": [t["topic"]["name"] for t in d["repositoryTopics"]["nodes"]],
             "license": (d["licenseInfo"] or {}).get("spdxId"), "stars": d["stargazerCount"],
             "pushed": d["pushedAt"] or "", "archived": d["isArchived"],
@@ -132,18 +132,18 @@ def mark(repo, status, **extra):
 
 
 def fetch(repos, token):
-    return [dict(to_row(d), repo=r) if d else mark(r, "deleted") for r, d in query_repos(repos, FIELDS, token)]
+    return [dict(to_row(d), repo=r) if d else mark(r, "unavailable") for r, d in query_repos(repos, FIELDS, token)]
 
 
 def probe_removed(repos, token):
     out = []
-    for r, d in query_repos(repos, "nameWithOwner", token):
+    for r, d in query_repos(repos, "databaseId nameWithOwner", token):
         if not d:
-            out.append(mark(r, "deleted"))
+            out.append(mark(r, "unavailable"))
         elif d["nameWithOwner"].lower() != r.lower():
-            out.append(mark(r, "renamed", renamed_to=d["nameWithOwner"]))
+            out.append(mark(r, "renamed", id=d["databaseId"], renamed_to=d["nameWithOwner"]))
         else:
-            out.append(mark(r, "unstarred"))
+            out.append(mark(r, "unstarred", id=d["databaseId"]))
     return out
 
 
@@ -200,7 +200,7 @@ def cmd_sync(a):
                     key=lambda x: (x["name"].split("-", 1)[1], not x["name"].startswith("base-")))
     if not any(x["name"].startswith("base-") for x in assets):
         sys.exit("no base-*.jsonl.gz.age in the release; run the rebase workflow or `import` first")
-    rows = {}
+    kb = Corpus()
     for x in assets:
         path = enc / x["name"]
         if not path.exists() or path.stat().st_size != x["size"]:
@@ -208,18 +208,15 @@ def cmd_sync(a):
         plain = subprocess.run(["age", "-d", "-i", "-", str(path)], input=key, capture_output=True, check=True).stdout
         for line in gzip.decompress(plain).decode("utf-8").split("\n"):
             if line.strip():
-                merge(rows, json.loads(line))
-        print(f"{x['name']}: {len(rows)} repos so far", file=sys.stderr)
+                kb.merge(json.loads(line))
+        print(f"{x['name']}: {len(kb.rows)} repos so far", file=sys.stderr)
     live = repo_names_from_url(f"https://raw.githubusercontent.com/{a.repo}/main/assets/data/stars.json")
-    missing = sorted(live - rows.keys())
+    missing = sorted(live - kb.names.keys())
     if missing:
         sys.exit(f"{len(missing)} starred repositories are not in the release ({', '.join(missing[:5])}); "
                  "local database left unchanged. Wait for the nightly run or run the rebase workflow.")
-    for k, r in rows.items():
-        if k in live and r["status"] != "deleted":
-            r["status"] = "starred"
-        elif r["status"] == "starred":
-            r["status"] = "unstarred"
+    kb.settle(live)
+    rows = kb.rows
     corpus = data / "corpus.jsonl"
     with open(corpus, "w", encoding="utf-8") as f:
         for r in rows.values():
@@ -235,12 +232,45 @@ BLANK = {"desc": "", "topics": [], "license": None, "stars": None, "pushed": "",
          "readme": ""}
 
 
-def merge(rows, r):
-    key = r["repo"].lower()
-    if "status" in r:
-        rows[key] = {**BLANK, **rows.get(key, {"repo": r["repo"]}), **r}
-    else:
-        rows[key] = {**r, "status": "starred"}
+class Corpus:
+    """Records keyed by GitHub repository id, so a name taken over by another repository keeps two histories."""
+
+    def __init__(self):
+        self.rows = {}
+        self.names = {}
+
+    def key_for(self, r):
+        name = r["repo"].lower()
+        if r.get("id") is None:
+            return self.names.get(name, name)
+        key = f"id:{r['id']}"
+        old = self.names.get(name)
+        if key not in self.rows and old in self.rows and self.rows[old].get("id") is None:
+            self.rows[key] = self.rows.pop(old)
+        return key
+
+    def merge(self, r):
+        key = self.key_for(r)
+        cur = self.rows.get(key)
+        if "status" not in r:
+            rec = {**r, "status": "starred"}
+            if cur and cur["repo"].lower() != r["repo"].lower():
+                rec["renamed_from"] = cur["repo"]
+            self.rows[key] = rec
+            self.names[r["repo"].lower()] = key
+        elif cur and r["status"] == "renamed" and cur["repo"].lower() == r["renamed_to"].lower():
+            return
+        else:
+            self.rows[key] = {**BLANK, "repo": r["repo"], **(cur or {}),
+                              **{k: v for k, v in r.items() if k != "repo"}}
+            self.names.setdefault(r["repo"].lower(), key)
+
+    def settle(self, live):
+        for key, r in self.rows.items():
+            if r["repo"].lower() in live and self.names.get(r["repo"].lower()) == key:
+                r["status"] = "starred"
+            elif r["status"] == "starred":
+                r["status"] = "unstarred"
 
 
 def repo_names_from_url(url):
@@ -261,8 +291,9 @@ def build(corpus, db):
         tmp.unlink()
     con = sqlite3.connect(tmp)
     con.executescript("""
-    CREATE TABLE repo(repo TEXT PRIMARY KEY, stars INT, license TEXT, lang TEXT, pushed TEXT, archived INT,
-                      topics TEXT, descr TEXT, readme TEXT, status TEXT, status_at TEXT, renamed_to TEXT);
+    CREATE TABLE repo(rid INTEGER PRIMARY KEY, repo TEXT, stars INT, license TEXT, lang TEXT, pushed TEXT, archived INT,
+                      topics TEXT, descr TEXT, readme TEXT, status TEXT, status_at TEXT, renamed_to TEXT,
+                      gh_id INT);
     CREATE VIRTUAL TABLE fts USING fts5(repo, topics, descr, readme, tokenize='porter unicode61');
     """)
     n = 0
@@ -270,11 +301,12 @@ def build(corpus, db):
         for line in f:
             r = {**BLANK, "status": "starred", **json.loads(line)}
             topics = " ".join(r["topics"])
-            con.execute("INSERT OR REPLACE INTO repo VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (r["repo"], r["stars"], r["license"], r["lang"], (r["pushed"] or "")[:10],
-                         int(r["archived"]), topics, r["desc"], r["readme"], r["status"], r.get("status_at"),
-                         r.get("renamed_to")))
-            con.execute("INSERT INTO fts VALUES (?,?,?,?)", (r["repo"], topics, r["desc"], r["readme"]))
+            rid = con.execute("INSERT INTO repo VALUES (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                              (r["repo"], r["stars"], r["license"], r["lang"], (r["pushed"] or "")[:10],
+                               int(r["archived"]), topics, r["desc"], r["readme"], r["status"],
+                               r.get("status_at"), r.get("renamed_to"), r.get("id"))).lastrowid
+            con.execute("INSERT INTO fts(rowid, repo, topics, descr, readme) VALUES (?,?,?,?,?)",
+                        (rid, r["repo"], topics, r["desc"], r["readme"]))
             n += 1
     con.commit()
     con.close()
@@ -292,7 +324,7 @@ def connect(a):
 def cmd_search(a):
     con = connect(a)
     q = a.query if not a.strict else " AND ".join(f"{{topics descr}}: {w}" for w in a.query.split())
-    sql = ("SELECT r.repo, r.stars, r.license, r.lang, r.descr, r.status FROM fts JOIN repo r ON r.repo = fts.repo "
+    sql = ("SELECT r.repo, r.stars, r.license, r.lang, r.descr, r.status FROM fts JOIN repo r ON r.rid = fts.rowid "
            "WHERE fts MATCH ?" + (" AND r.license = ?" if a.license else "")
            + (" AND r.status = 'starred'" if a.starred else "") + " ORDER BY bm25(fts) LIMIT ?")
     args = [q] + ([a.license] if a.license else []) + [a.n]
@@ -302,14 +334,16 @@ def cmd_search(a):
 
 
 def cmd_show(a):
-    row = connect(a).execute("SELECT * FROM repo WHERE lower(repo) = lower(?)", (a.repo,)).fetchone()
-    if not row:
+    rows = connect(a).execute("SELECT * FROM repo WHERE lower(repo) = lower(?) ORDER BY status = 'starred' DESC",
+                              (a.repo,)).fetchall()
+    if not rows:
         sys.exit("not found")
-    repo, stars, lic, lang, pushed, archived, topics, descr, readme, status, status_at, renamed_to = row
-    print(f"{repo}  ★{stars}  {lic or '-'}  {lang or '-'}  pushed {pushed}{'  ARCHIVED' if archived else ''}")
-    if status != "starred":
-        print(f"{status.upper()} {status_at or ''}{f' -> {renamed_to}' if renamed_to else ''}")
-    print(f"topics: {topics}\n{descr}\n\n{readme[:1500]}")
+    for _, repo, stars, lic, lang, pushed, archived, topics, descr, readme, status, status_at, renamed_to, gh_id in rows:
+        print(f"{repo}  ★{stars}  {lic or '-'}  {lang or '-'}  pushed {pushed}{'  ARCHIVED' if archived else ''}"
+              f"{f'  id {gh_id}' if gh_id else ''}")
+        if status != "starred":
+            print(f"{status.upper()} {status_at or ''}{f' -> {renamed_to}' if renamed_to else ''}")
+        print(f"topics: {topics}\n{descr}\n\n{readme[:1500]}\n")
 
 
 def cmd_stats(a):
