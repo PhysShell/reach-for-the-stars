@@ -108,21 +108,43 @@ def graphql(query, token):
             print(f"retry after {e}", file=sys.stderr)
 
 
-def fetch(repos, token):
-    rows = []
+def query_repos(repos, fields, token):
+    """Yield (name, node); node is None only when GitHub answers NOT_FOUND for that repository."""
     for i in range(0, len(repos), BATCH):
         chunk = repos[i:i + BATCH]
-        q = "query{" + " ".join(f'r{k}:repository(owner:{json.dumps(o)},name:{json.dumps(n)}){{{FIELDS}}}'
+        q = "query{" + " ".join(f'r{k}:repository(owner:{json.dumps(o)},name:{json.dumps(n)}){{{fields}}}'
                                 for k, (o, n) in enumerate(r.split("/", 1) for r in chunk)) + "}"
         resp = graphql(q, token) or {}
         data = resp.get("data") or {}
-        bad = [r for k, r in enumerate(chunk) if not data.get(f"r{k}")]
-        if bad or resp.get("errors"):
+        errors = resp.get("errors") or []
+        gone = {e["path"][0] for e in errors if e.get("type") == "NOT_FOUND" and e.get("path")}
+        other = [e for e in errors if e.get("type") != "NOT_FOUND"]
+        bad = [r for k, r in enumerate(chunk) if not data.get(f"r{k}") and f"r{k}" not in gone]
+        if bad or other:
             sys.exit(f"{len(bad)} of {len(chunk)} repositories not returned ({', '.join(bad[:5])}); "
-                     f"errors: {json.dumps(resp.get('errors'))[:300]}")
-        rows += [dict(to_row(data[f"r{k}"]), repo=r) for k, r in enumerate(chunk)]
-        print(f"fetched {min(i + BATCH, len(repos))}/{len(repos)}", file=sys.stderr)
-    return rows
+                     f"errors: {json.dumps(other)[:300]}")
+        yield from ((r, data.get(f"r{k}")) for k, r in enumerate(chunk))
+        print(f"queried {min(i + BATCH, len(repos))}/{len(repos)}", file=sys.stderr)
+
+
+def mark(repo, status, **extra):
+    return {"repo": repo, "status": status, "status_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **extra}
+
+
+def fetch(repos, token):
+    return [dict(to_row(d), repo=r) if d else mark(r, "deleted") for r, d in query_repos(repos, FIELDS, token)]
+
+
+def probe_removed(repos, token):
+    out = []
+    for r, d in query_repos(repos, "nameWithOwner", token):
+        if not d:
+            out.append(mark(r, "deleted"))
+        elif d["nameWithOwner"].lower() != r.lower():
+            out.append(mark(r, "renamed", renamed_to=d["nameWithOwner"]))
+        else:
+            out.append(mark(r, "unstarred"))
+    return out
 
 
 def write_gz(rows, out):
@@ -133,12 +155,16 @@ def write_gz(rows, out):
 
 
 def cmd_delta(a):
-    old = set(r.lower() for r in repo_names(a.old)) if a.old and Path(a.old).exists() else set()
-    new = [r for r in repo_names(a.new) if r.lower() not in old]
-    print(f"new stars: {len(new)}", file=sys.stderr)
-    if not new:
+    old = repo_names(a.old) if a.old and Path(a.old).exists() else []
+    cur = repo_names(a.new)
+    old_keys, cur_keys = {r.lower() for r in old}, {r.lower() for r in cur}
+    new = [r for r in cur if r.lower() not in old_keys]
+    removed = [r for r in old if r.lower() not in cur_keys]
+    print(f"new stars: {len(new)}, removed: {len(removed)}", file=sys.stderr)
+    if not new and not removed:
         return
-    write_gz(fetch(new, os.environ["GITHUB_TOKEN"]), a.out)
+    token = os.environ["GITHUB_TOKEN"]
+    write_gz(fetch(new, token) + probe_removed(removed, token), a.out)
 
 
 def cmd_full(a):
@@ -170,36 +196,51 @@ def cmd_sync(a):
     enc = data / "encrypted"
     enc.mkdir(parents=True, exist_ok=True)
     rel = http_json(f"https://api.github.com/repos/{a.repo}/releases/tags/{RELEASE_TAG}")
-    assets = sorted((x for x in rel["assets"] if x["name"].endswith(".jsonl.gz.age")), key=lambda x: x["name"])
-    bases = [x for x in assets if x["name"].startswith("base-")]
-    if not bases:
+    assets = sorted((x for x in rel["assets"] if re.match(r"(base|delta)-.*\.jsonl\.gz\.age$", x["name"])),
+                    key=lambda x: (x["name"].split("-", 1)[1], not x["name"].startswith("base-")))
+    if not any(x["name"].startswith("base-") for x in assets):
         sys.exit("no base-*.jsonl.gz.age in the release; run the rebase workflow or `import` first")
-    base = bases[-1]
-    chain = [base] + [x for x in assets if x["name"].startswith("delta-") and x["name"][6:] >= base["name"][5:]]
     rows = {}
-    for x in chain:
+    for x in assets:
         path = enc / x["name"]
         if not path.exists() or path.stat().st_size != x["size"]:
             urllib.request.urlretrieve(x["browser_download_url"], path)
         plain = subprocess.run(["age", "-d", "-i", "-", str(path)], input=key, capture_output=True, check=True).stdout
         for line in gzip.decompress(plain).decode("utf-8").split("\n"):
-            if not line.strip():
-                continue
-            r = json.loads(line)
-            rows[r["repo"].lower()] = r
+            if line.strip():
+                merge(rows, json.loads(line))
         print(f"{x['name']}: {len(rows)} repos so far", file=sys.stderr)
     live = repo_names_from_url(f"https://raw.githubusercontent.com/{a.repo}/main/assets/data/stars.json")
     missing = sorted(live - rows.keys())
     if missing:
         sys.exit(f"{len(missing)} starred repositories are not in the release ({', '.join(missing[:5])}); "
                  "local database left unchanged. Wait for the nightly run or run the rebase workflow.")
-    kept = [r for k, r in rows.items() if k in live]
+    for k, r in rows.items():
+        if k in live and r["status"] != "deleted":
+            r["status"] = "starred"
+        elif r["status"] == "starred":
+            r["status"] = "unstarred"
     corpus = data / "corpus.jsonl"
     with open(corpus, "w", encoding="utf-8") as f:
-        for r in kept:
+        for r in rows.values():
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
-    print(f"corpus: {len(kept)} starred ({len(rows) - len(kept)} no longer starred dropped)", file=sys.stderr)
+    counts = {}
+    for r in rows.values():
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    print(f"corpus: {len(rows)} repos {counts}", file=sys.stderr)
     build(corpus, data / "stars.db")
+
+
+BLANK = {"desc": "", "topics": [], "license": None, "stars": None, "pushed": "", "archived": False, "lang": None,
+         "readme": ""}
+
+
+def merge(rows, r):
+    key = r["repo"].lower()
+    if "status" in r:
+        rows[key] = {**BLANK, **rows.get(key, {"repo": r["repo"]}), **r}
+    else:
+        rows[key] = {**r, "status": "starred"}
 
 
 def repo_names_from_url(url):
@@ -221,17 +262,18 @@ def build(corpus, db):
     con = sqlite3.connect(tmp)
     con.executescript("""
     CREATE TABLE repo(repo TEXT PRIMARY KEY, stars INT, license TEXT, lang TEXT, pushed TEXT, archived INT,
-                      topics TEXT, descr TEXT, readme TEXT);
+                      topics TEXT, descr TEXT, readme TEXT, status TEXT, status_at TEXT, renamed_to TEXT);
     CREATE VIRTUAL TABLE fts USING fts5(repo, topics, descr, readme, tokenize='porter unicode61');
     """)
     n = 0
     with open(corpus, encoding="utf-8") as f:
         for line in f:
-            r = json.loads(line)
+            r = {**BLANK, "status": "starred", **json.loads(line)}
             topics = " ".join(r["topics"])
-            con.execute("INSERT OR REPLACE INTO repo VALUES (?,?,?,?,?,?,?,?,?)",
+            con.execute("INSERT OR REPLACE INTO repo VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                         (r["repo"], r["stars"], r["license"], r["lang"], (r["pushed"] or "")[:10],
-                         int(r["archived"]), topics, r["desc"], r["readme"]))
+                         int(r["archived"]), topics, r["desc"], r["readme"], r["status"], r.get("status_at"),
+                         r.get("renamed_to")))
             con.execute("INSERT INTO fts VALUES (?,?,?,?)", (r["repo"], topics, r["desc"], r["readme"]))
             n += 1
     con.commit()
@@ -250,25 +292,31 @@ def connect(a):
 def cmd_search(a):
     con = connect(a)
     q = a.query if not a.strict else " AND ".join(f"{{topics descr}}: {w}" for w in a.query.split())
-    sql = ("SELECT r.repo, r.stars, r.license, r.lang, r.descr FROM fts JOIN repo r ON r.repo = fts.repo "
-           "WHERE fts MATCH ?" + (" AND r.license = ?" if a.license else "") + " ORDER BY bm25(fts) LIMIT ?")
+    sql = ("SELECT r.repo, r.stars, r.license, r.lang, r.descr, r.status FROM fts JOIN repo r ON r.repo = fts.repo "
+           "WHERE fts MATCH ?" + (" AND r.license = ?" if a.license else "")
+           + (" AND r.status = 'starred'" if a.starred else "") + " ORDER BY bm25(fts) LIMIT ?")
     args = [q] + ([a.license] if a.license else []) + [a.n]
-    for repo, stars, lic, lang, descr in con.execute(sql, args):
-        print(f"{repo}  ★{stars}  {lic or '-'}  {lang or '-'}\n    {(descr or '')[:160]}")
+    for repo, stars, lic, lang, descr, status in con.execute(sql, args):
+        tag = "" if status == "starred" else f"  [{status.upper()}]"
+        print(f"{repo}  ★{stars}  {lic or '-'}  {lang or '-'}{tag}\n    {(descr or '')[:160]}")
 
 
 def cmd_show(a):
     row = connect(a).execute("SELECT * FROM repo WHERE lower(repo) = lower(?)", (a.repo,)).fetchone()
     if not row:
         sys.exit("not found")
-    repo, stars, lic, lang, pushed, archived, topics, descr, readme = row
+    repo, stars, lic, lang, pushed, archived, topics, descr, readme, status, status_at, renamed_to = row
     print(f"{repo}  ★{stars}  {lic or '-'}  {lang or '-'}  pushed {pushed}{'  ARCHIVED' if archived else ''}")
+    if status != "starred":
+        print(f"{status.upper()} {status_at or ''}{f' -> {renamed_to}' if renamed_to else ''}")
     print(f"topics: {topics}\n{descr}\n\n{readme[:1500]}")
 
 
 def cmd_stats(a):
     con = connect(a)
     print("repos:", con.execute("SELECT count(*) FROM repo").fetchone()[0])
+    for status, n in con.execute("SELECT status, count(*) FROM repo GROUP BY status ORDER BY 2 DESC"):
+        print(f"  {status}: {n}")
     for lang, n in con.execute("SELECT lang, count(*) c FROM repo GROUP BY lang ORDER BY c DESC LIMIT 10"):
         print(f"  {lang or '-'}: {n}")
 
@@ -285,6 +333,7 @@ def main():
     s = sub.add_parser("import"); s.add_argument("--corpus", required=True)
     s = sub.add_parser("search"); s.add_argument("query"); s.add_argument("-n", type=int, default=20)
     s.add_argument("--strict", action="store_true"); s.add_argument("--license")
+    s.add_argument("--starred", action="store_true", help="only repositories that are still starred")
     s = sub.add_parser("show"); s.add_argument("repo")
     sub.add_parser("stats")
     a = p.parse_args()

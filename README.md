@@ -40,8 +40,8 @@ Output shape:
 
 The data lives in the `stars-kb` release as files encrypted with [age](https://age-encryption.org) to a post-quantum hybrid recipient (ML-KEM-768 + X25519, `age-keygen -pq`). The public recipient is `assets/stars-kb.pub`. Only the owner of the matching private key can read the files, and the private key is never stored in GitHub.
 
-- **Nightly** (`reach-for-the-stars.yml`): after `stars.json` is updated, the repositories that are new since the previous `stars.json` are fetched through GraphQL. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
-- **Rebase** (`stars-kb-rebase.yml`, manual): fetches every starred repository again, uploads `base-<timestamp>.jsonl.gz.age`, and deletes older files. Use it to refresh star counts and dates, or after replacing a lost key.
+- **Nightly** (`reach-for-the-stars.yml`): the repositories that are new since the previous `stars.json` are fetched through GraphQL, and the ones that left the list are checked and marked `unstarred`, `deleted` or `renamed`. The batch is encrypted and uploaded as `delta-<timestamp>.jsonl.gz.age`.
+- **Rebase** (`stars-kb-rebase.yml`, manual): fetches every starred repository again, and uploads `base-<timestamp>.jsonl.gz.age`. Older files stay, so repositories that are no longer starred keep their data. Use it to refresh star counts and dates, or after replacing a lost key.
 - **Locally**, with the age CLI ≥ 1.3 and the Bitwarden CLI (`bw`) on `PATH`. The private key is the notes field of the Bitwarden item `stars-kb`; it is piped to age and never written to disk.
 
   ```bash
@@ -50,11 +50,12 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
   python scripts/stars_kb.py sync --key path/to/stars-kb.key   # or read the key from a file
   python scripts/stars_kb.py search "beat detection" -n 20
   python scripts/stars_kb.py search "matting" --strict --license MIT
+  python scripts/stars_kb.py search "tts" --starred                # only repositories still starred
   python scripts/stars_kb.py show owner/repo
   python scripts/stars_kb.py stats
   ```
 
-  Repositories that are no longer in `stars.json` are dropped during `sync`. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
+  Nothing is dropped: every repository ever stored has a status, `starred`, `unstarred`, `deleted` (not found on GitHub) or `renamed`, shown by `search`, `show` and `stats`. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
 
 The nightly run pushes `stars.json` only after its delta is in the release, and both workflows share one concurrency group, so a failed run is redone by the next one. A GraphQL batch with errors or missing repositories fails the run instead of writing a partial file.
 
@@ -62,6 +63,4 @@ The nightly run pushes `stars.json` only after its delta is in the release, and 
 1. Run `age-keygen -pq -o stars-kb.key`.
 2. Put the `# public key:` line (without the prefix) into `assets/stars-kb.pub`.
 3. Replace the notes of the Bitwarden item `stars-kb` with the contents of `stars-kb.key`, then delete the file.
-4. Run the rebase workflow.
-
-Files encrypted to the old key become unreadable and are deleted by the rebase.
+4. Delete the old `base-*` and `delta-*` files from the `stars-kb` release (`sync` cannot read them any more), then run the rebase workflow. History kept under the old key is lost with it.
