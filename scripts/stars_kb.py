@@ -348,7 +348,10 @@ def connect(a):
     db = Path(a.data) / "stars.db"
     if not db.exists():
         sys.exit(f"{db} not found; run `sync` or `import` first")
-    return sqlite3.connect(db)
+    con = sqlite3.connect(db)
+    if "gh_id" not in {c[1] for c in con.execute("PRAGMA table_info(repo)")}:
+        sys.exit(f"{db} was built by an older stars_kb.py; rebuild it with `sync` or `import`")
+    return con
 
 
 def cmd_search(a):
@@ -401,6 +404,7 @@ def main():
     s = sub.add_parser("show"); s.add_argument("repo")
     sub.add_parser("stats")
     a = p.parse_args()
+    sys.stdout.reconfigure(encoding="utf-8")
     {"list": cmd_list, "delta": cmd_delta, "full": cmd_full, "sync": cmd_sync, "import": cmd_import,
      "search": cmd_search, "show": cmd_show, "stats": cmd_stats}[a.cmd](a)
 
