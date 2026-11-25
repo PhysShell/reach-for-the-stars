@@ -21,6 +21,8 @@ Output shape:
   "stars": [
     {
       "repo": "owner/repo",
+      "id": 123456789,
+      "node_id": "R_kgDOxxxxxx",
       "link": "https://github.com/owner/repo",
       "description": "Example description",
       "stars": 1234,
@@ -55,7 +57,7 @@ The data lives in the `stars-kb` release as files encrypted with [age](https://a
   python scripts/stars_kb.py stats
   ```
 
-  Nothing is dropped: every repository ever stored has a status, `starred`, `unstarred`, `unavailable` (GitHub answers "not found": deleted, made private or blocked) or `renamed`, shown by `search`, `show` and `stats`. Records are keyed by GitHub's repository id, so a name that another repository takes over after a rename keeps both histories. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
+  Nothing is dropped: every repository ever stored has a status, `starred`, `unstarred`, `unavailable` (GitHub answers "not found": deleted, made private or blocked) or `renamed`, shown by `search`, `show` and `stats`. Records are keyed by GitHub's repository id: the nightly run compares star lists by id, fetches repositories by their global id, and `sync` checks that every starred id has a record, so a name that another repository takes over after a rename keeps both histories and cannot hide a new star. If a starred repository is missing from the release, `sync` stops and leaves the local database unchanged.
 
 The nightly run pushes `stars.json` only after its delta is in the release, and both workflows share one concurrency group, so a failed run is redone by the next one. A GraphQL batch with errors or missing repositories fails the run instead of writing a partial file.
 

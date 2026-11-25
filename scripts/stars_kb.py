@@ -43,7 +43,7 @@ def cmd_list(a):
     stars, after, totals = [], "", set()
     while True:
         q = ('query{user(login:%s){starredRepositories(first:100, orderBy:{field:STARRED_AT, direction:DESC}%s)'
-             '{totalCount pageInfo{hasNextPage endCursor} edges{starredAt node{nameWithOwner url description '
+             '{totalCount pageInfo{hasNextPage endCursor} edges{starredAt node{id databaseId nameWithOwner url description '
              'stargazerCount forkCount pushedAt primaryLanguage{name color}}}}}}') % (json.dumps(a.user), after)
         page = graphql(q, token)
         conn = ((page or {}).get("data") or {}).get("user", {}).get("starredRepositories")
@@ -52,7 +52,7 @@ def cmd_list(a):
         totals.add(conn["totalCount"])
         for e in conn["edges"]:
             n = e["node"]
-            stars.append({"repo": n["nameWithOwner"], "link": n["url"], "description": n["description"] or "",
+            stars.append({"repo": n["nameWithOwner"], "id": n["databaseId"], "node_id": n["id"], "link": n["url"], "description": n["description"] or "",
                           "stars": n["stargazerCount"], "forks": n["forkCount"],
                           "language": (n["primaryLanguage"] or {}).get("name"),
                           "language_color": (n["primaryLanguage"] or {}).get("color"),
@@ -60,7 +60,7 @@ def cmd_list(a):
         if not conn["pageInfo"]["hasNextPage"]:
             break
         after = ", after:" + json.dumps(conn["pageInfo"]["endCursor"])
-    unique = len({s["repo"].lower() for s in stars})
+    unique = len({s["id"] for s in stars})
     if len(totals) != 1 or unique != len(stars) or unique != conn["totalCount"]:
         sys.exit(f"listed {unique} unique of {len(stars)} rows, totalCount {sorted(totals)}; "
                  "stars changed during listing or the list is incomplete, not writing it")
@@ -69,13 +69,14 @@ def cmd_list(a):
     print(f"{len(stars)} stars -> {a.out}", file=sys.stderr)
 
 
-def repo_names(stars_json):
-    data = json.loads(Path(stars_json).read_text(encoding="utf-8"))
-    out = []
-    for s in data["stars"]:
-        parts = s["link"].rstrip("/").split("/")
-        out.append(f"{parts[-2]}/{parts[-1]}")
-    return out
+def entries(data):
+    """Stars as {repo, id, node_id}; ids are None in lists written before they were recorded."""
+    return [{"repo": "/".join(s["link"].rstrip("/").split("/")[-2:]), "id": s.get("id"), "node_id": s.get("node_id")}
+            for s in data["stars"]]
+
+
+def load_entries(path):
+    return entries(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
 def readme_text(raw):
@@ -108,22 +109,30 @@ def graphql(query, token):
             print(f"retry after {e}", file=sys.stderr)
 
 
+def lookup(k, e, fields):
+    if e.get("node_id"):
+        return f'r{k}:node(id:{json.dumps(e["node_id"])}){{...on Repository{{{fields}}}}}'
+    o, n = e["repo"].split("/", 1)
+    return f'r{k}:repository(owner:{json.dumps(o)},name:{json.dumps(n)}){{{fields}}}'
+
+
 def query_repos(repos, fields, token):
-    """Yield (name, node); node is None only when GitHub answers NOT_FOUND for that repository."""
+    """Yield (entry, node); node is None when GitHub answers NOT_FOUND or the name now belongs to another id."""
     for i in range(0, len(repos), BATCH):
         chunk = repos[i:i + BATCH]
-        q = "query{" + " ".join(f'r{k}:repository(owner:{json.dumps(o)},name:{json.dumps(n)}){{{fields}}}'
-                                for k, (o, n) in enumerate(r.split("/", 1) for r in chunk)) + "}"
+        q = "query{" + " ".join(lookup(k, e, fields) for k, e in enumerate(chunk)) + "}"
         resp = graphql(q, token) or {}
         data = resp.get("data") or {}
         errors = resp.get("errors") or []
         gone = {e["path"][0] for e in errors if e.get("type") == "NOT_FOUND" and e.get("path")}
         other = [e for e in errors if e.get("type") != "NOT_FOUND"]
-        bad = [r for k, r in enumerate(chunk) if not data.get(f"r{k}") and f"r{k}" not in gone]
+        bad = [e["repo"] for k, e in enumerate(chunk) if not data.get(f"r{k}") and f"r{k}" not in gone]
         if bad or other:
             sys.exit(f"{len(bad)} of {len(chunk)} repositories not returned ({', '.join(bad[:5])}); "
                      f"errors: {json.dumps(other)[:300]}")
-        yield from ((r, data.get(f"r{k}")) for k, r in enumerate(chunk))
+        for k, e in enumerate(chunk):
+            d = data.get(f"r{k}")
+            yield e, (None if d and e.get("id") is not None and d["databaseId"] != e["id"] else d)
         print(f"queried {min(i + BATCH, len(repos))}/{len(repos)}", file=sys.stderr)
 
 
@@ -132,14 +141,16 @@ def mark(repo, status, **extra):
 
 
 def fetch(repos, token):
-    return [dict(to_row(d), repo=r) if d else mark(r, "unavailable") for r, d in query_repos(repos, FIELDS, token)]
+    return [dict(to_row(d), repo=e["repo"]) if d else mark(e["repo"], "unavailable", id=e["id"])
+            for e, d in query_repos(repos, FIELDS, token)]
 
 
 def probe_removed(repos, token):
     out = []
-    for r, d in query_repos(repos, "databaseId nameWithOwner", token):
+    for e, d in query_repos(repos, "databaseId nameWithOwner", token):
+        r = e["repo"]
         if not d:
-            out.append(mark(r, "unavailable"))
+            out.append(mark(r, "unavailable", id=e["id"]))
         elif d["nameWithOwner"].lower() != r.lower():
             out.append(mark(r, "renamed", id=d["databaseId"], renamed_to=d["nameWithOwner"]))
         else:
@@ -155,11 +166,13 @@ def write_gz(rows, out):
 
 
 def cmd_delta(a):
-    old = repo_names(a.old) if a.old and Path(a.old).exists() else []
-    cur = repo_names(a.new)
-    old_keys, cur_keys = {r.lower() for r in old}, {r.lower() for r in cur}
-    new = [r for r in cur if r.lower() not in old_keys]
-    removed = [r for r in old if r.lower() not in cur_keys]
+    old = load_entries(a.old) if a.old and Path(a.old).exists() else []
+    cur = load_entries(a.new)
+    by_id = all(e["id"] is not None for e in old + cur)
+    key = (lambda e: e["id"]) if by_id else (lambda e: e["repo"].lower())
+    old_keys, cur_keys = {key(e) for e in old}, {key(e) for e in cur}
+    new = [e for e in cur if key(e) not in old_keys]
+    removed = [e for e in old if key(e) not in cur_keys]
     print(f"new stars: {len(new)}, removed: {len(removed)}", file=sys.stderr)
     if not new and not removed:
         return
@@ -168,7 +181,7 @@ def cmd_delta(a):
 
 
 def cmd_full(a):
-    write_gz(fetch(repo_names(a.stars), os.environ["GITHUB_TOKEN"]), a.out)
+    write_gz(fetch(load_entries(a.stars), os.environ["GITHUB_TOKEN"]), a.out)
 
 
 def http_json(url):
@@ -210,12 +223,11 @@ def cmd_sync(a):
             if line.strip():
                 kb.merge(json.loads(line))
         print(f"{x['name']}: {len(kb.rows)} repos so far", file=sys.stderr)
-    live = repo_names_from_url(f"https://raw.githubusercontent.com/{a.repo}/main/assets/data/stars.json")
-    missing = sorted(live - kb.names.keys())
+    live = live_entries(f"https://raw.githubusercontent.com/{a.repo}/main/assets/data/stars.json")
+    missing = kb.settle(live)
     if missing:
         sys.exit(f"{len(missing)} starred repositories are not in the release ({', '.join(missing[:5])}); "
                  "local database left unchanged. Wait for the nightly run or run the rebase workflow.")
-    kb.settle(live)
     rows = kb.rows
     corpus = data / "corpus.jsonl"
     with open(corpus, "w", encoding="utf-8") as f:
@@ -266,17 +278,35 @@ class Corpus:
             self.names.setdefault(r["repo"].lower(), key)
 
     def settle(self, live):
+        """Mark the records behind `live` starred and return the stars that have no record."""
+        claimed, missing = set(), []
+        for e in live:
+            name = e["repo"].lower()
+            key = f"id:{e['id']}" if e["id"] is not None else None
+            if key not in self.rows:
+                legacy = self.names.get(name)
+                if legacy not in self.rows or (e["id"] is not None and self.rows[legacy].get("id") is not None):
+                    missing.append(e["repo"])
+                    continue
+                key = legacy
+                if e["id"] is not None:
+                    key = f"id:{e['id']}"
+                    self.rows[key] = dict(self.rows.pop(legacy), id=e["id"])
+                    self.names[name] = key
+            r = self.rows[key]
+            if r["repo"].lower() != name:
+                r["renamed_from"], r["repo"] = r["repo"], e["repo"]
+            r["status"] = "starred"
+            claimed.add(key)
         for key, r in self.rows.items():
-            if r["repo"].lower() in live and self.names.get(r["repo"].lower()) == key:
-                r["status"] = "starred"
-            elif r["status"] == "starred":
+            if key not in claimed and r["status"] == "starred":
                 r["status"] = "unstarred"
+        return missing
 
 
-def repo_names_from_url(url):
+def live_entries(url):
     with urllib.request.urlopen(url, timeout=60) as r:
-        data = json.load(r)
-    return {"/".join(s["link"].rstrip("/").split("/")[-2:]).lower() for s in data["stars"]}
+        return entries(json.load(r))
 
 
 def cmd_import(a):

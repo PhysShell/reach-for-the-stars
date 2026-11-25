@@ -22,7 +22,7 @@ def repo(name, gid=None):
 class Fetch(unittest.TestCase):
     def run_fetch(self, response, repos=("o/a", "o/b")):
         with mock.patch.object(kb, "graphql", return_value=response):
-            return kb.fetch(list(repos), "t")
+            return kb.fetch([live_entry(r) for r in repos], "t")
 
     def test_all_returned(self):
         rows = self.run_fetch({"data": {"r0": repo("o/a"), "r1": repo("o/b")}})
@@ -84,7 +84,7 @@ class Delta(unittest.TestCase):
 
 def star_page(names, total, more, cursor="c"):
     edges = [{"starredAt": "2026-01-01T00:00:00Z",
-              "node": {"nameWithOwner": n, "url": f"https://github.com/{n}", "description": None,
+              "node": {"id": f"N_{n}", "databaseId": abs(hash(n)) % 10**9, "nameWithOwner": n, "url": f"https://github.com/{n}", "description": None,
                        "stargazerCount": 1, "forkCount": 0, "pushedAt": None, "primaryLanguage": None}}
              for n in names]
     return {"data": {"user": {"starredRepositories": {
@@ -115,6 +115,13 @@ class List(unittest.TestCase):
             self.run_list([star_page(["o/a"], 2, True), star_page(["o/b", "o/c"], 3, False)])
 
 
+def live_entry(x):
+    if isinstance(x, dict):
+        return x
+    name, gid = x if isinstance(x, tuple) else (x, None)
+    return {"repo": name, "id": gid, "node_id": None}
+
+
 class Sync(unittest.TestCase):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
@@ -137,7 +144,7 @@ class Sync(unittest.TestCase):
                 mock.patch.object(kb, "http_json", return_value={"assets": assets}), \
                 mock.patch.object(kb.urllib.request, "urlretrieve", side_effect=retrieve), \
                 mock.patch.object(kb.subprocess, "run", side_effect=age), \
-                mock.patch.object(kb, "repo_names_from_url", return_value=set(live)):
+                mock.patch.object(kb, "live_entries", return_value=[live_entry(x) for x in live]):
             kb.cmd_sync(argparse.Namespace(data=str(self.data), repo="x/y", key=None, bw="stars-kb"))
 
     def indexed(self):
@@ -241,6 +248,44 @@ class Sync(unittest.TestCase):
         first = list(self.db().execute("SELECT * FROM repo ORDER BY rid"))
         self.run_sync(assets, ["o/a"])
         self.assertEqual(list(self.db().execute("SELECT * FROM repo ORDER BY rid")), first)
+
+
+    def test_star_with_known_id_but_no_record_is_missing(self):
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1}])], [("o/p", 1)])
+        with self.assertRaises(SystemExit):
+            self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1}])],
+                          [("o/p", 1), ("o/p2", 2), ("x/p", 3)])
+        with self.assertRaises(SystemExit):
+            self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1}])], [("o/p", 2)])
+
+    def test_new_repository_under_a_renamed_name_reaches_the_index(self):
+        tmp = Path(tempfile.mkdtemp())
+
+        def stars(path, items):
+            path.write_text(json.dumps({"stars": [{"link": f"https://github.com/{n}", "id": i, "node_id": f"N{i}"}
+                                                  for n, i in items]}), encoding="utf-8")
+            return path
+
+        old = stars(tmp / "old.json", [("o/p", 1)])
+        new = stars(tmp / "new.json", [("o/q", 1), ("o/p", 2)])
+        out = tmp / "d.jsonl.gz"
+        sent = []
+
+        def answer(q, token):
+            sent.append(q)
+            return {"data": {"r0": repo("o/p", 2)}}
+
+        with mock.patch.object(kb, "graphql", side_effect=answer), mock.patch.dict(os.environ, {"GITHUB_TOKEN": "t"}):
+            kb.cmd_delta(argparse.Namespace(old=str(old), new=str(new), out=str(out)))
+        self.assertEqual(len(sent), 1)
+        self.assertIn('node(id:"N2")', sent[0])
+        self.files["delta"] = out.read_bytes()
+        delta = {"name": "delta-20260102T000000.jsonl.gz.age", "size": len(self.files["delta"]),
+                 "browser_download_url": "delta"}
+        self.run_sync([self.asset("base-20260101T000000.jsonl.gz.age", [{"repo": "o/p", "id": 1, "readme": "old"}]),
+                       delta], kb.load_entries(new))
+        rows = sorted(self.db().execute("SELECT repo, gh_id, status, readme FROM repo"))
+        self.assertEqual(rows, [("o/p", 2, "starred", "readme"), ("o/q", 1, "starred", "old")])
 
 
 if __name__ == "__main__":
